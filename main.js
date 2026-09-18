@@ -546,6 +546,10 @@
   var aiCitations = document.getElementById("ai-citations");
   var aiReview = document.getElementById("ai-review");
   var applyFixBtn = document.getElementById("apply-fix-btn");
+  var refineBox = document.getElementById("refine-box");
+  var refineText = document.getElementById("refine-text");
+  var refineBtn = document.getElementById("refine-btn");
+  var conversationLogEl = document.getElementById("conversation-log");
 
   // Based on the City of Vancouver's R1-1 (Residential Inclusive) district
   // schedule, adopted citywide in November 2023, replacing the old
@@ -688,7 +692,7 @@
 
   var pendingFix = null;
 
-  function runReview(key, originalText, fields, stats) {
+  function runReview(key, originalText, fields, stats, sourceLabel) {
     aiReview.style.display = "block";
     aiReview.className = "busy";
     aiReview.innerHTML = "<div class=\"rev-title\">Reviewer check</div>Checking the massing against the description…";
@@ -718,13 +722,13 @@
           applyFixBtn.style.display = "block";
         }
 
-        logHistory(mode === "simple" ? "AI parse + review" : "AI parse + review (irregular parcel)", lastStats);
+        logHistory(sourceLabel || "AI parse + review", lastStats);
       })
       .catch(function (err) {
         aiReview.className = "";
         aiReview.style.display = "none";
         // Reviewer failing shouldn't hide the already-applied parse results.
-        logHistory("AI parse (reviewer unavailable)", lastStats);
+        logHistory((sourceLabel || "AI parse") + " (reviewer unavailable)", lastStats);
         console.error("Reviewer check failed:", err.message);
       });
   }
@@ -771,12 +775,83 @@
         setStatus("Applied " + applied.length + " value" + (applied.length === 1 ? "" : "s") + " from the description.", "ok");
         renderCitations(fields);
         aiBtn.disabled = false;
+        // A fresh base parse starts a new conversation for refinement turns.
+        conversationTurns = [];
+        conversationLogEl.innerHTML = "";
+        refineBox.style.display = "block";
         // Kick off the reviewer pass against the freshly computed stats.
-        runReview(key, text, fields, lastStats);
+        runReview(key, text, fields, lastStats, mode === "simple" ? "AI parse + review" : "AI parse + review (irregular parcel)");
       })
       .catch(function (err) {
         setStatus("Couldn't parse that: " + err.message, "err");
         aiBtn.disabled = false;
+      });
+  });
+
+  // ==========================================================================
+  // Conversational refinement: follow-up instructions applied against the
+  // current state, not a fresh parse, mirroring the "prompt, iterate, and
+  // refine... conversationally" workflow this lab's own MCP-Grasshopper
+  // paper describes, rather than a single one-shot generation.
+  // ==========================================================================
+
+  var REFINE_SYSTEM = "You are refining an already-generated building massing based on a follow-up " +
+    "instruction, not parsing from scratch. You will get the CURRENT parameter values and a new " +
+    "instruction describing a change relative to them. Respond with a single JSON object containing " +
+    "ONLY the fields that should change as a result of the instruction (omit any field that stays the " +
+    "same; return {} if the instruction doesn't map to any of them), in this shape: " +
+    "{\"fieldName\": {\"value\": number, \"source\": string, \"confidence\": \"high\"|\"medium\"|\"low\"}}. " +
+    "Valid field names: lotWidth, lotDepth, setbackFront, setbackSide, setbackRear, maxHeight, " +
+    "floorHeight, maxFAR. All lengths in meters, maxFAR is a unitless ratio. \"source\" briefly explains " +
+    "how you derived the new value from the instruction and the current state (e.g. arithmetic from a " +
+    "relative change like \"one storey taller\").";
+
+  var conversationTurns = [];
+
+  function currentFieldValues() {
+    var out = {};
+    FIELD_KEYS.forEach(function (key) { out[key] = parseFloat(els[FIELD_MAP[key]].value); });
+    return out;
+  }
+
+  function renderConversation() {
+    conversationLogEl.innerHTML = conversationTurns.map(function (t) {
+      var appliedText = t.applied.length
+        ? "<div class=\"conv-applied\">→ " + t.applied.map(function (k) {
+            return FIELD_LABELS[k] + " = " + fmt(t.fields[k].value);
+          }).join(", ") + "</div>"
+        : "<div class=\"conv-none\">No matching parameter found for this instruction.</div>";
+      return "<div class=\"conv-turn\"><span class=\"conv-user\">" + t.instruction + "</span>" + appliedText + "</div>";
+    }).join("");
+  }
+
+  refineBtn.addEventListener("click", function () {
+    var instruction = refineText.value.trim();
+    var key = aiKey.value.trim();
+    if (!key) { setStatus("Enter your Anthropic API key first.", "err"); return; }
+    if (!instruction) return;
+
+    refineBtn.disabled = true;
+    applyFixBtn.style.display = "none";
+    var current = currentFieldValues();
+    var summary = "CURRENT VALUES:\n" + JSON.stringify(current, null, 2) + "\n\nINSTRUCTION:\n" + instruction;
+
+    callClaude(key, REFINE_SYSTEM, summary, 300)
+      .then(function (fields) {
+        var applied = applyParsedFields(fields);
+        conversationTurns.push({ instruction: instruction, fields: fields, applied: applied });
+        renderConversation();
+        refineText.value = "";
+        refineBtn.disabled = false;
+        if (applied.length > 0) {
+          renderCitations(fields);
+          setStatus("Applied " + applied.length + " change" + (applied.length === 1 ? "" : "s") + " from the refinement.", "ok");
+          runReview(key, instruction, fields, lastStats, "Refinement: “" + instruction + "”");
+        }
+      })
+      .catch(function (err) {
+        setStatus("Couldn't apply that refinement: " + err.message, "err");
+        refineBtn.disabled = false;
       });
   });
 

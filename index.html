@@ -105,6 +105,15 @@
     border: 1px solid #3a4148; border-radius: 5px; padding: 7px; font-size: 11.5px;
     font-weight: 600; cursor: pointer;
   }
+  #refine-btn:disabled { opacity: 0.5; cursor: default; }
+  #conversation-log { margin-top: 10px; font-size: 11px; color: #8b9199; line-height: 1.6; }
+  #conversation-log .conv-turn { padding: 7px 0; border-top: 1px solid #20252b; }
+  #conversation-log .conv-turn:first-child { border-top: none; }
+  #conversation-log .conv-user { color: #e7e7e5; }
+  #conversation-log .conv-user::before { content: "\201c"; }
+  #conversation-log .conv-user::after { content: "\201d"; }
+  #conversation-log .conv-applied { color: #7fbf6a; margin-top: 2px; }
+  #conversation-log .conv-none { color: #6b7178; margin-top: 2px; font-style: italic; }
 
   /* history log */
   #history-box { margin-top: 16px; }
@@ -157,6 +166,17 @@
       <div id="ai-citations"></div>
       <div id="ai-review"></div>
       <button id="apply-fix-btn">Apply reviewer's suggested fix</button>
+
+      <div id="refine-box" style="display:none;">
+        <hr style="margin:12px 0;">
+        <div class="ai-title">Refine conversationally</div>
+        <div class="ai-hint">Describe a change against the current state, like a conversation, not a fresh parse. e.g. "make it one storey taller" or "switch to the rental bonus."</div>
+        <div class="btn-row">
+          <input type="text" id="refine-text" placeholder="e.g. reduce the front setback to 3m" style="flex:1;background:#0f1215;color:#e7e7e5;border:1px solid #2a3138;border-radius:5px;padding:7px 8px;font-size:12px;">
+          <button id="refine-btn" style="flex:0 0 auto;background:#e07b5a;color:#14171b;border:none;border-radius:5px;padding:8px 12px;font-size:12px;font-weight:700;cursor:pointer;">Refine</button>
+        </div>
+        <div id="conversation-log"></div>
+      </div>
     </div>
 
     <div id="mode-toggle">

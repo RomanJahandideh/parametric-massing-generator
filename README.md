@@ -1,6 +1,6 @@
 # Parametric Massing Generator
 
-A computational design tool that generates a buildable massing envelope from zoning constraints, on a rectangular lot or an irregular parcel, with AI-assisted parsing, source citations, an independent reviewer pass, and a multi-view (3D + plan) output.
+A computational design tool that generates a buildable massing envelope from zoning constraints, on a rectangular lot or an irregular parcel, with conversational AI-assisted parsing and refinement, source citations, an independent reviewer pass, and a multi-view (3D + plan) output.
 
 **Try it live:** open `index.html` in a browser, or serve the folder with any static file server.
 
@@ -33,6 +33,12 @@ Instead of setting sliders by hand, you can paste a bylaw excerpt or describe a 
 Every parse and every applied fix is written to a visible **generation history** log (timestamp, source, and the resulting floor count/GFA/FAR), so there's a traceable record of how the current proposal was arrived at, not just its final state.
 
 This is a small-scale version of the same idea behind traceable, citation-preserving generative design: keep the source, the uncertainty, an independent check, and a record of how a proposal was generated and reviewed, all visible, instead of handing back a single confident-looking number with no way to verify it.
+
+## Conversational refinement, not just one-shot parsing
+
+After a parse, a "Refine conversationally" box appears: type a follow-up instruction, like *"make it one storey taller"* or *"switch to the rental bonus"* or *"reduce the front setback to 3m"*, and Claude interprets it as a change against the **current** state, not a fresh parse from scratch. Only the field(s) the instruction actually affects change; everything else holds. Each turn is logged as a visible exchange (the instruction, and exactly what it changed), and the independent reviewer runs again after every turn, so a multi-step conversation stays just as checkable as the first parse.
+
+This is meant to actually behave like a conversation, prompt, see the result, refine, rather than a single request-response. It's a small, single-user version of the same idea behind treating AI as a continuing collaborator in a modeling session, not a one-shot generator you re-prompt from zero every time you want a change.
 
 Both AI steps use **your own Anthropic API key**, entered in the browser and sent directly from your browser to Anthropic's API. It is never sent to, stored by, or visible to this site, there is no backend here at all, this is a static site with no server. (AI parsing targets the simple rectangular model; irregular parcel shapes are chosen from the presets, a deterministic geometry capability kept deliberately separate from free-text parsing.)
 
