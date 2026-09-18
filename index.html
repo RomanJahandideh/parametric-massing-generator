@@ -46,6 +46,9 @@
   #perf-notes { font-size: 11px; color: #8b9199; line-height: 1.6; margin-top: 8px; }
   #perf-notes .pn-row { margin-bottom: 3px; }
   #perf-notes .pn-flag { color: #e0a25a; }
+  #vancouver-eligibility { font-size: 11px; line-height: 1.6; margin-bottom: 6px; }
+  #vancouver-eligibility .elig-ok { color: #7fbf6a; }
+  #vancouver-eligibility .elig-warn { color: #e0a25a; }
   .foot { margin-top: 20px; font-size: 11px; color: #5c636b; line-height: 1.6; }
   .foot a { color: #e07b5a; text-decoration: none; }
 
@@ -162,6 +165,23 @@
     </div>
 
     <div id="simple-controls">
+      <div class="group">
+        <label>Zoning preset</label>
+        <select id="zoning-preset">
+          <option value="custom">Custom (manual sliders)</option>
+          <option value="vancouver-r1-1">Vancouver R1-1 multiplex (2023 citywide zoning)</option>
+        </select>
+      </div>
+      <div id="vancouver-panel" style="display:none;">
+        <label style="display:flex;align-items:flex-start;gap:7px;font-size:11px;color:#c3c8cd;margin-bottom:8px;cursor:pointer;">
+          <input type="checkbox" id="vancouver-rental-bonus" style="margin-top:2px;">
+          <span>Secured rental / below-market unit (FSR bonus 0.70 &rarr; 1.00)</span>
+        </label>
+        <div id="vancouver-eligibility"></div>
+        <div style="font-size:10.5px;color:#5c636b;line-height:1.5;margin-bottom:10px;">
+          Base provisions of the City of Vancouver's R1-1 (Residential Inclusive) district, adopted citywide in November 2023, replacing single-family-only RS zoning. Simplified for this demo; always confirm against the current bylaw and your specific lot.
+        </div>
+      </div>
       <div class="group">
         <label>Lot width <span class="val" id="v-lotW"></span></label>
         <input type="range" id="lotW" min="10" max="60" step="0.1" value="24">

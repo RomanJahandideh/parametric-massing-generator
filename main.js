@@ -278,6 +278,10 @@
   var irregularControls = document.getElementById("irregular-controls");
   var modeSimpleBtn = document.getElementById("mode-simple");
   var modeIrregularBtn = document.getElementById("mode-irregular");
+  var zoningPresetSelect = document.getElementById("zoning-preset");
+  var vancouverPanel = document.getElementById("vancouver-panel");
+  var vancouverRentalBonus = document.getElementById("vancouver-rental-bonus");
+  var vancouverEligibilityEl = document.getElementById("vancouver-eligibility");
 
   var mode = "simple"; // "simple" | "irregular"
   var lastStats = null;      // populated by regenerate(), read by the reviewer AI call
@@ -311,6 +315,65 @@
     var preset = PRESETS[presetSelect.value];
     return { poly: preset.poly, setbacks: preset.setbacks };
   }
+
+  // ==========================================================================
+  // Vancouver R1-1 (Residential Inclusive) zoning preset: the district that
+  // replaced single-family-only RS zoning citywide in November 2023. Unlike
+  // the other presets, this one has real conditional rules baked into the
+  // bylaw itself, floor space ratio depends on whether a unit is secured
+  // rental/below-market, and the number of units (and whether a lot even
+  // qualifies for a multiplex at all) depends on frontage and lot area
+  // thresholds, structuring conditional rules the way an actual bylaw does,
+  // rather than a single flat number.
+  // ==========================================================================
+
+  var VANCOUVER_R1_1 = {
+    setF: 4.9, setS: 1.2, setR: 10.7, maxH: 11.5, floorH: 3.83,
+    farBase: 0.70, farRentalBonus: 1.00,
+    tiers: [
+      { minFrontage: 15.1, minArea: 557, units: "6–8 units (6 strata, or 8 with secured rental)" },
+      { minFrontage: 13.4, minArea: 464, units: "4–5 units" },
+      { minFrontage: 10.0, minArea: 306, units: "3–4 units" },
+    ],
+  };
+
+  function applyVancouverPreset() {
+    els.setF.value = VANCOUVER_R1_1.setF;
+    els.setS.value = VANCOUVER_R1_1.setS;
+    els.setR.value = VANCOUVER_R1_1.setR;
+    els.maxH.value = VANCOUVER_R1_1.maxH;
+    els.floorH.value = VANCOUVER_R1_1.floorH;
+    els.far.value = vancouverRentalBonus.checked ? VANCOUVER_R1_1.farRentalBonus : VANCOUVER_R1_1.farBase;
+  }
+
+  function renderVancouverEligibility() {
+    var w = parseFloat(els.lotW.value), d = parseFloat(els.lotD.value);
+    var area = w * d;
+    var tier = VANCOUVER_R1_1.tiers.find(function (t) { return w >= t.minFrontage && area >= t.minArea; });
+    if (tier) {
+      vancouverEligibilityEl.innerHTML = "<span class=\"elig-ok\">✓ Qualifies for " + tier.units +
+        "</span> at this frontage (" + fmt(w) + "m) and area (" + fmt(area) + "m²).";
+    } else {
+      vancouverEligibilityEl.innerHTML = "<span class=\"elig-warn\">⚠ Below the multiplex minimum</span> " +
+        "(needs at least 10.0m frontage and 306m²); a duplex or single-family provision would apply instead " +
+        "of the full R1-1 multiplex schedule at this size.";
+    }
+  }
+
+  zoningPresetSelect.addEventListener("change", function () {
+    var isVancouver = zoningPresetSelect.value === "vancouver-r1-1";
+    vancouverPanel.style.display = isVancouver ? "block" : "none";
+    if (isVancouver) {
+      applyVancouverPreset();
+      renderVancouverEligibility();
+    }
+    regenerate();
+  });
+  vancouverRentalBonus.addEventListener("change", function () {
+    if (zoningPresetSelect.value !== "vancouver-r1-1") return;
+    els.far.value = vancouverRentalBonus.checked ? VANCOUVER_R1_1.farRentalBonus : VANCOUVER_R1_1.farBase;
+    regenerate();
+  });
 
   function regenerate() {
     var maxH = parseFloat(els.maxH.value);
@@ -410,6 +473,10 @@
       envelopeRatio: compactness,
     };
     lastFootprint = footprint;
+
+    if (mode === "simple" && zoningPresetSelect.value === "vancouver-r1-1") {
+      renderVancouverEligibility();
+    }
   }
 
   Object.keys(els).forEach(function (id) {
@@ -426,6 +493,8 @@
     modeIrregularBtn.classList.toggle("active", mode === "irregular");
     simpleControls.style.display = mode === "simple" ? "" : "none";
     irregularControls.style.display = mode === "irregular" ? "" : "none";
+    if (mode !== "simple") vancouverPanel.style.display = "none";
+    else if (zoningPresetSelect.value === "vancouver-r1-1") vancouverPanel.style.display = "block";
     regenerate();
   }
   modeSimpleBtn.addEventListener("click", function () { setMode("simple"); });
@@ -478,10 +547,16 @@
   var aiReview = document.getElementById("ai-review");
   var applyFixBtn = document.getElementById("apply-fix-btn");
 
-  var VANCOUVER_EXAMPLE = "RS-1 single-family lot in Vancouver, 33 feet by 122 feet (about 10m x 37m). " +
-    "Front yard setback 4.9m (16 ft), side yards 1.2m each, rear yard 10.7m (35 ft) or 40% of lot depth, " +
-    "whichever is less. Maximum building height 9.5m for two storeys under the outright approval, floor " +
-    "space ratio 0.7 (0.75 with a basement). Assume 3.2m floor-to-floor height.";
+  // Based on the City of Vancouver's R1-1 (Residential Inclusive) district
+  // schedule, adopted citywide in November 2023, replacing the old
+  // single-family-only RS zoning. Numbers verified via the district's public
+  // provisions as of this writing; a real bylaw excerpt would cite the
+  // schedule directly rather than paraphrasing it like this.
+  var VANCOUVER_EXAMPLE = "R1-1 multiplex lot in Vancouver, 15.2m by 37m (about 50 ft by 122 ft), zoned " +
+    "under the City's 2023 citywide multiplex zoning that replaced single-family RS-1. Front yard setback " +
+    "4.9m, side yards 1.2m each, rear yard 10.7m for a single building. Maximum height 11.5m over 3 storeys " +
+    "for the front or single building. Base floor space ratio 0.70, rising to 1.00 if a unit is secured " +
+    "rental or below-market housing. Assume 3.2m floor-to-floor height.";
 
   exampleBtn.addEventListener("click", function () {
     aiText.value = VANCOUVER_EXAMPLE;
@@ -680,6 +755,10 @@
     setStatus("Asking Claude to read the description…", "busy");
 
     if (mode !== "simple") setMode("simple"); // AI parsing targets the simple rectangular model
+    if (zoningPresetSelect.value !== "custom") {
+      zoningPresetSelect.value = "custom";
+      vancouverPanel.style.display = "none";
+    }
 
     callClaude(key, PARSE_SYSTEM, text, 500)
       .then(function (fields) {

@@ -17,9 +17,15 @@ Instead of drawing a massing model by hand, this tool derives it directly from t
 
 It's a first-pass generative check, the kind of thing you'd want before spending time on a detailed design that turns out to not fit the envelope at all.
 
+## A real Vancouver zoning district, with its actual conditional rules
+
+Since Vancouver is the test bed for a lot of current zoning-and-AI research, there's a "Zoning preset" dropdown with the City of Vancouver's **R1-1 (Residential Inclusive)** district, the multiplex zoning that replaced single-family-only RS zoning citywide in November 2023. This isn't a rounded-off approximation, it's the district's real base provisions: 4.9m front setback, 1.2m side yards, 10.7m rear yard, 11.5m / 3-storey height limit, and a floor space ratio that is itself conditional (0.70 base, rising to 1.00 if a unit is secured rental or below-market housing, an actual checkbox in the tool, not a static number).
+
+The lot-width and lot-depth sliders also drive a live **unit-count eligibility check** against R1-1's real frontage and lot-area thresholds (10.0m / 306m² for 3–4 units, 13.4m / 464m² for 4–5 units, 15.1m / 557m² for 6–8 units), including a warning when a lot is too small to qualify for a multiplex at all. That's a small, concrete example of the same "structures conditional rules" idea Decoding Urban Form is built around: a real bylaw's numbers aren't one flat figure, they branch on conditions, and the tool represents that branching instead of flattening it into a single value.
+
 ## AI-assisted parsing, with citations and a reviewer that can suggest a fix
 
-Instead of setting sliders by hand, you can paste a bylaw excerpt or describe a lot in plain English (there's a "Vancouver example" button that fills in a realistic RS-1-style description). This runs in two steps, deliberately mirroring how a real regulatory-reading pipeline should behave, not just guessing a number and moving on:
+Instead of setting sliders by hand, you can paste a bylaw excerpt or describe a lot in plain English (there's a "Vancouver example" button that fills in a description based on the real R1-1 provisions above). This runs in two steps, deliberately mirroring how a real regulatory-reading pipeline should behave, not just guessing a number and moving on:
 
 1. **Parse with citations.** Claude extracts each parameter along with the exact phrase in your text it came from, and a confidence level (high / medium / low / none). If it can't find or reasonably infer a value, it says so instead of fabricating one. The extracted values, their sources, and their confidence are all shown, so nothing is a black box.
 2. **Independent review, with a suggested fix.** A second, separate call checks the generated massing (floor count, height, FAR achieved) against the original text and the extracted parameters, and flags "concerns" if a stated constraint wasn't reflected, a value had to be guessed with low confidence, or the achieved numbers drift meaningfully from what was asked for. When it can point to a single field that would resolve the concern, it proposes a corrected value, shown as a one-click "apply reviewer's fix" button, rather than just flagging a problem and leaving it there.
@@ -45,6 +51,10 @@ This only works because Anthropic's API explicitly supports direct browser reque
 ## Why I built this
 
 I work across architecture, landscape architecture, and interactive systems, and I wanted a small, concrete demonstration of computational and parametric design: turning written constraints, whether set by hand or read out of a bylaw by an LLM, into a generated 3D form on real (if simplified) parcel geometry, not just a rectangle, with the source of every value kept visible, a second independent pass checking the result, and a record of how each version came to be. That's a smaller version of the same basic pattern behind generative and agentic design tools working on zoning and massing today: read, structure, generate against real geometry, and verify, rather than just generate.
+
+## A note on the Vancouver numbers
+
+The R1-1 figures above are drawn from the City of Vancouver's public zoning provisions for the district as adopted in November 2023, cross-checked across multiple current sources rather than taken from a single one. They're simplified for a demo (a few conditional provisions, like the separate, shorter rules for a rear building in a courtyard configuration, aren't modeled), and bylaws get amended, so this is a starting point for exploration, not something to design or apply from without checking the current official bylaw and your specific lot.
 
 ## Run it locally
 
