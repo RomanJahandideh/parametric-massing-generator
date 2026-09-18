@@ -9,7 +9,7 @@
   var camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
   var renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  viewport.appendChild(renderer.domElement);
+  viewport.insertBefore(renderer.domElement, viewport.firstChild);
 
   // --- lights ---
   scene.add(new THREE.AmbientLight(0xffffff, 0.55));
@@ -64,7 +64,117 @@
     updateCamera();
   }, { passive: false });
 
-  // --- generated geometry group ---
+  // ==========================================================================
+  // Polygon geometry: inward offset by (possibly different) per-edge setbacks,
+  // via half-plane intersection (Sutherland-Hodgman clipping against each
+  // inward-shifted edge in turn). Correct for any convex polygon, including
+  // the plain rectangle used in "simple" mode. Verified against known
+  // rectangle/triangle test cases before wiring into the app.
+  // ==========================================================================
+
+  function signedArea(poly) {
+    var a = 0;
+    for (var i = 0; i < poly.length; i++) {
+      var p1 = poly[i], p2 = poly[(i + 1) % poly.length];
+      a += p1.x * p2.z - p2.x * p1.z;
+    }
+    return a / 2;
+  }
+
+  function shoelaceArea(poly) {
+    return Math.abs(signedArea(poly));
+  }
+
+  function polygonPerimeter(poly) {
+    var p = 0;
+    for (var i = 0; i < poly.length; i++) {
+      var a = poly[i], b = poly[(i + 1) % poly.length];
+      p += Math.hypot(b.x - a.x, b.z - a.z);
+    }
+    return p;
+  }
+
+  function intersectEdgeHalfPlane(p1, p2, ox, oz, nx, nz) {
+    var dx = p2.x - p1.x, dz = p2.z - p1.z;
+    var denom = dx * nx + dz * nz;
+    var t = denom !== 0 ? (((ox - p1.x) * nx + (oz - p1.z) * nz) / denom) : 0;
+    t = Math.max(0, Math.min(1, t));
+    return { x: p1.x + dx * t, z: p1.z + dz * t };
+  }
+
+  function clipPolygonHalfPlane(poly, ox, oz, nx, nz) {
+    if (poly.length === 0) return [];
+    var out = [];
+    for (var i = 0; i < poly.length; i++) {
+      var curr = poly[i], prev = poly[(i - 1 + poly.length) % poly.length];
+      var currIn = ((curr.x - ox) * nx + (curr.z - oz) * nz) >= -1e-9;
+      var prevIn = ((prev.x - ox) * nx + (prev.z - oz) * nz) >= -1e-9;
+      if (currIn) {
+        if (!prevIn) out.push(intersectEdgeHalfPlane(prev, curr, ox, oz, nx, nz));
+        out.push(curr);
+      } else if (prevIn) {
+        out.push(intersectEdgeHalfPlane(prev, curr, ox, oz, nx, nz));
+      }
+    }
+    return out;
+  }
+
+  function offsetPolygonInward(poly, setbacks) {
+    var inwardSign = signedArea(poly) > 0 ? -1 : 1;
+    var current = poly.slice();
+    for (var i = 0; i < poly.length; i++) {
+      if (current.length === 0) break;
+      var a = poly[i], b = poly[(i + 1) % poly.length];
+      var setback = setbacks[i] || 0;
+      var dx = b.x - a.x, dz = b.z - a.z;
+      var len = Math.sqrt(dx * dx + dz * dz);
+      if (len < 1e-9) continue;
+      dx /= len; dz /= len;
+      var nx = inwardSign * dz, nz = -inwardSign * dx;
+      var ox = a.x + nx * setback, oz = a.z + nz * setback;
+      current = clipPolygonHalfPlane(current, ox, oz, nx, nz);
+    }
+    return current;
+  }
+
+  // ==========================================================================
+  // Parcel presets: irregular, convex parcel shapes, each with per-edge
+  // setbacks and labels. Vertices are CCW in the x-z (ground) plane.
+  // ==========================================================================
+
+  var PRESETS = {
+    corner: {
+      name: "Corner lot (chamfered street corner)",
+      poly: [
+        { x: -9, z: -12 }, { x: 6, z: -12 }, { x: 9, z: -9 },
+        { x: 9, z: 12 }, { x: -9, z: 12 },
+      ],
+      setbacks: [4.5, 3, 3, 6, 1.5],
+      labels: ["Front (main street)", "Corner chamfer (sightline)", "Flanking street side", "Rear", "Interior side"],
+    },
+    flag: {
+      name: "Narrow-frontage lot",
+      poly: [
+        { x: -5, z: -15 }, { x: 5, z: -15 }, { x: 10, z: 15 }, { x: -10, z: 15 },
+      ],
+      setbacks: [4.5, 1.5, 6, 1.5],
+      labels: ["Front (narrow)", "Side", "Rear (wide)", "Side"],
+    },
+    triangle: {
+      name: "Triangular corner lot (diagonal intersection)",
+      poly: [
+        { x: -10, z: -10 }, { x: 14, z: -10 }, { x: -10, z: 14 },
+      ],
+      setbacks: [4.5, 3, 1.5],
+      labels: ["Front (main street)", "Flanking street (diagonal)", "Interior side"],
+    },
+  };
+
+  // ==========================================================================
+  // 3D mesh + outline helpers, generalized to arbitrary convex polygons
+  // (a plain rectangle in "simple" mode is just a 4-point polygon).
+  // ==========================================================================
+
   var genGroup = new THREE.Group();
   scene.add(genGroup);
 
@@ -76,53 +186,152 @@
     }
   }
 
-  function rectOutline(w, d, y, color) {
-    var pts = [
-      new THREE.Vector3(-w / 2, y, -d / 2),
-      new THREE.Vector3(w / 2, y, -d / 2),
-      new THREE.Vector3(w / 2, y, d / 2),
-      new THREE.Vector3(-w / 2, y, d / 2),
-      new THREE.Vector3(-w / 2, y, -d / 2),
-    ];
+  function polygonOutline(poly, y, color) {
+    if (poly.length < 2) return new THREE.Group();
+    var pts = poly.map(function (p) { return new THREE.Vector3(p.x, y, p.z); });
+    pts.push(pts[0]);
     var geo = new THREE.BufferGeometry().setFromPoints(pts);
     var mat = new THREE.LineBasicMaterial({ color: color });
     return new THREE.Line(geo, mat);
   }
+
+  // Manually triangulated extrusion (fan triangulation, valid for convex
+  // polygons) rather than THREE.Shape/ExtrudeGeometry, so the x/y/z mapping
+  // is explicit and matches the rest of the file's ground-plane convention
+  // (x-z is the ground plane, y is height) with no coordinate-space guessing.
+  function buildExtrudedPolygonMesh(poly, height, material) {
+    var n = poly.length;
+    if (n < 3) return null;
+    var positions = [];
+    for (var i = 0; i < n; i++) positions.push(poly[i].x, 0, poly[i].z);
+    for (i = 0; i < n; i++) positions.push(poly[i].x, height, poly[i].z);
+    var indices = [];
+    for (i = 1; i < n - 1; i++) indices.push(0, i, i + 1);
+    for (i = 1; i < n - 1; i++) indices.push(n, n + i + 1, n + i);
+    for (i = 0; i < n; i++) {
+      var a = i, b = (i + 1) % n, aTop = n + i, bTop = n + ((i + 1) % n);
+      indices.push(a, b, bTop);
+      indices.push(a, bTop, aTop);
+    }
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    return new THREE.Mesh(geo, material);
+  }
+
+  function polygonBounds(poly) {
+    var minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    poly.forEach(function (p) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z);
+    });
+    return { minX: minX, maxX: maxX, minZ: minZ, maxZ: maxZ };
+  }
+
+  // ==========================================================================
+  // 2D plan view (multi-view rendering): a live top-down SVG showing the
+  // parcel boundary and the buildable (setback) footprint, alongside the
+  // 3D view rather than instead of it.
+  // ==========================================================================
+
+  var planContainer = document.getElementById("plan-svg-container");
+
+  function polyToSvgPoints(poly, toSvg) {
+    return poly.map(function (p) {
+      var s = toSvg(p);
+      return s.x.toFixed(1) + "," + s.y.toFixed(1);
+    }).join(" ");
+  }
+
+  function renderPlanView(parcelPoly, footprintPoly) {
+    var b = polygonBounds(parcelPoly);
+    var w = Math.max(1, b.maxX - b.minX), d = Math.max(1, b.maxZ - b.minZ);
+    var pad = Math.max(w, d) * 0.12;
+    var viewW = w + pad * 2, viewH = d + pad * 2;
+    function toSvg(p) {
+      // x -> right, z -> down the page (a schematic plan, not compass-oriented)
+      return { x: p.x - b.minX + pad, y: p.z - b.minZ + pad };
+    }
+    var parcelPts = polyToSvgPoints(parcelPoly, toSvg);
+    var footPts = footprintPoly.length >= 3 ? polyToSvgPoints(footprintPoly, toSvg) : "";
+    var svg = "<svg viewBox=\"0 0 " + viewW.toFixed(1) + " " + viewH.toFixed(1) + "\" xmlns=\"http://www.w3.org/2000/svg\">" +
+      "<polygon points=\"" + parcelPts + "\" fill=\"none\" stroke=\"#3a4148\" stroke-width=\"" + (viewW * 0.01) + "\" />" +
+      (footPts ? "<polygon points=\"" + footPts + "\" fill=\"rgba(224,123,90,0.18)\" stroke=\"#e07b5a\" stroke-width=\"" + (viewW * 0.012) + "\" />" : "") +
+      "</svg>";
+    planContainer.innerHTML = svg;
+  }
+
+  // ==========================================================================
+  // Controls, state, and the unified regenerate() pipeline
+  // ==========================================================================
 
   var els = {};
   ["lotW", "lotD", "setF", "setS", "setR", "maxH", "floorH", "far"].forEach(function (id) {
     els[id] = document.getElementById(id);
   });
   var statsEl = document.getElementById("stats");
-  var lastStats = null; // populated by regenerate(), read by the reviewer AI call
+  var perfNotesEl = document.getElementById("perf-notes");
+  var presetSelect = document.getElementById("preset-select");
+  var presetSetbacksEl = document.getElementById("preset-setbacks");
+  var simpleControls = document.getElementById("simple-controls");
+  var irregularControls = document.getElementById("irregular-controls");
+  var modeSimpleBtn = document.getElementById("mode-simple");
+  var modeIrregularBtn = document.getElementById("mode-irregular");
+
+  var mode = "simple"; // "simple" | "irregular"
+  var lastStats = null;      // populated by regenerate(), read by the reviewer AI call
+  var lastFootprint = null;  // last buildable footprint polygon, for the plan view / history
 
   function fmt(n, unit) {
     return (Math.round(n * 10) / 10) + (unit || "");
   }
 
+  function buildSimpleParcel() {
+    var w = parseFloat(els.lotW.value), d = parseFloat(els.lotD.value);
+    var poly = [
+      { x: -w / 2, z: -d / 2 }, { x: w / 2, z: -d / 2 },
+      { x: w / 2, z: d / 2 }, { x: -w / 2, z: d / 2 },
+    ];
+    var setbacks = [
+      parseFloat(els.setF.value), parseFloat(els.setS.value),
+      parseFloat(els.setR.value), parseFloat(els.setS.value),
+    ];
+    return { poly: poly, setbacks: setbacks };
+  }
+
+  function renderPresetSetbacks(preset) {
+    presetSetbacksEl.innerHTML = preset.labels.map(function (label, i) {
+      return "<div>" + label + ": <b style=\"color:#e07b5a\">" + fmt(preset.setbacks[i]) + " m</b></div>";
+    }).join("");
+  }
+
+  function currentParcel() {
+    if (mode === "simple") return buildSimpleParcel();
+    var preset = PRESETS[presetSelect.value];
+    return { poly: preset.poly, setbacks: preset.setbacks };
+  }
+
   function regenerate() {
-    var lotW = parseFloat(els.lotW.value);
-    var lotD = parseFloat(els.lotD.value);
-    var setF = parseFloat(els.setF.value);
-    var setS = parseFloat(els.setS.value);
-    var setR = parseFloat(els.setR.value);
     var maxH = parseFloat(els.maxH.value);
     var floorH = parseFloat(els.floorH.value);
     var far = parseFloat(els.far.value);
 
-    document.getElementById("v-lotW").textContent = fmt(lotW, " m");
-    document.getElementById("v-lotD").textContent = fmt(lotD, " m");
-    document.getElementById("v-setF").textContent = fmt(setF, " m");
-    document.getElementById("v-setS").textContent = fmt(setS, " m");
-    document.getElementById("v-setR").textContent = fmt(setR, " m");
+    document.getElementById("v-lotW").textContent = fmt(parseFloat(els.lotW.value), " m");
+    document.getElementById("v-lotD").textContent = fmt(parseFloat(els.lotD.value), " m");
+    document.getElementById("v-setF").textContent = fmt(parseFloat(els.setF.value), " m");
+    document.getElementById("v-setS").textContent = fmt(parseFloat(els.setS.value), " m");
+    document.getElementById("v-setR").textContent = fmt(parseFloat(els.setR.value), " m");
     document.getElementById("v-maxH").textContent = fmt(maxH, " m");
     document.getElementById("v-floorH").textContent = fmt(floorH, " m");
     document.getElementById("v-far").textContent = fmt(far, "");
 
-    var footprintW = Math.max(0, lotW - 2 * setS);
-    var footprintD = Math.max(0, lotD - setF - setR);
-    var footprintArea = footprintW * footprintD;
-    var lotArea = lotW * lotD;
+    var parcel = currentParcel();
+    var parcelPoly = parcel.poly, setbacks = parcel.setbacks;
+    var lotArea = shoelaceArea(parcelPoly);
+    var footprint = offsetPolygonInward(parcelPoly, setbacks);
+    var footprintArea = footprint.length >= 3 ? shoelaceArea(footprint) : 0;
+    var footprintPerimeter = footprint.length >= 3 ? polygonPerimeter(footprint) : 0;
 
     var floorsByHeight = Math.max(0, Math.floor(maxH / floorH));
     var maxGFA = far * lotArea;
@@ -134,48 +343,37 @@
     var limitedBy = floors === 0 ? "no buildable envelope" : (floorsByHeight <= floorsByFAR ? "height limit" : "FAR limit");
 
     clearGroup(genGroup);
+    genGroup.add(polygonOutline(parcelPoly, 0.02, 0x3a4148));
+    if (footprint.length >= 3) genGroup.add(polygonOutline(footprint, 0.04, 0xe07b5a));
 
-    // lot boundary
-    genGroup.add(rectOutline(lotW, lotD, 0.02, 0x3a4148));
-    // buildable footprint outline
-    genGroup.add(rectOutline(footprintW, footprintD, 0.04, 0xe07b5a));
-
-    if (floors > 0 && footprintW > 0 && footprintD > 0) {
-      var massGeo = new THREE.BoxGeometry(footprintW, builtHeight, footprintD);
+    if (floors > 0 && footprint.length >= 3) {
       var massMat = new THREE.MeshStandardMaterial({
-        color: 0xd8dadd, roughness: 0.85, metalness: 0.02,
+        color: 0xd8dadd, roughness: 0.85, metalness: 0.02, side: THREE.DoubleSide,
         transparent: true, opacity: 0.92,
       });
-      var mass = new THREE.Mesh(massGeo, massMat);
-      mass.position.y = builtHeight / 2;
-      genGroup.add(mass);
-
-      var edges = new THREE.EdgesGeometry(massGeo);
-      var edgeLines = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x1a1e23 }));
-      edgeLines.position.y = builtHeight / 2;
-      genGroup.add(edgeLines);
-
-      // floor division lines
+      var mass = buildExtrudedPolygonMesh(footprint, builtHeight, massMat);
+      if (mass) genGroup.add(mass);
       for (var i = 1; i < floors; i++) {
-        genGroup.add(rectOutline(footprintW, footprintD, i * floorH, 0x555c64));
-        var line2 = rectOutline(footprintW, footprintD, i * floorH, 0x555c64);
-        // reposition to sit on the box surface (already at correct y via rectOutline's y param)
+        genGroup.add(polygonOutline(footprint, i * floorH, 0x555c64));
       }
     }
 
-    target.set(0, builtHeight / 2, 0);
+    var b = polygonBounds(parcelPoly);
+    target.set((b.minX + b.maxX) / 2, builtHeight / 2, (b.minZ + b.maxZ) / 2);
     updateCamera();
+    renderPlanView(parcelPoly, footprint.length >= 3 ? footprint : []);
 
     // Envelope compactness: exterior surface area (walls + flat roof) per m2
     // of floor area. A simple, honest architectural performance proxy, lower
     // means less exposed surface per unit of floor area to gain/lose heat
     // through, not a certified energy model.
-    var wallArea = 2 * (footprintW + footprintD) * builtHeight;
-    var roofArea = footprintW * footprintD;
+    var wallArea = footprintPerimeter * builtHeight;
+    var roofArea = footprintArea;
     var envelopeArea = wallArea + roofArea;
     var compactness = gfa > 0 ? envelopeArea / gfa : 0;
 
     statsEl.innerHTML =
+      "Parcel area: <b>" + fmt(lotArea) + " m&sup2;</b><br>" +
       "Buildable footprint: <b>" + fmt(footprintArea) + " m&sup2;</b><br>" +
       "Floors: <b>" + floors + "</b> (" + floorsByHeight + " by height, " + floorsByFAR + " by FAR)<br>" +
       "Built height: <b>" + fmt(builtHeight, " m") + "</b> of " + fmt(maxH, " m") + " max<br>" +
@@ -184,29 +382,110 @@
       "Envelope ratio: <b>" + fmt(compactness) + "</b> m&sup2; surface / m&sup2; floor<br>" +
       "<span class=\"" + (floors === 0 ? "warn" : "ok") + "\">Limited by: " + limitedBy + "</span>";
 
+    // Simplified, clearly-labeled performance/code heuristics (Human-AI
+    // Co-Design's "performance into the generative loop" theme, at a scale
+    // that's honest about being a rule of thumb, not code-compliance advice).
+    var notes = [];
+    if (builtHeight > 18 || floors > 6) {
+      notes.push({ flag: true, text: "Over ~18m / 6 storeys: in BC this typically moves from Part 9 (combustible, wood-frame) to Part 3 construction, a materially different, costlier building type. Worth checking early." });
+    }
+    var shortestFootprintDim = footprint.length >= 3 ? Math.min(
+      polygonBounds(footprint).maxX - polygonBounds(footprint).minX,
+      polygonBounds(footprint).maxZ - polygonBounds(footprint).minZ
+    ) : 0;
+    if (shortestFootprintDim > 16) {
+      notes.push({ flag: true, text: "Floor plate over ~16m in its shortest dimension: interior daylighting typically suffers without a courtyard or light well." });
+    }
+    if (floors > 0 && shortestFootprintDim > 0 && builtHeight / shortestFootprintDim > 3) {
+      notes.push({ flag: true, text: "Height-to-footprint ratio is high (a slender tower): structural feasibility and wind loading deserve early engineering input." });
+    }
+    perfNotesEl.innerHTML = notes.map(function (n) {
+      return "<div class=\"pn-row" + (n.flag ? " pn-flag" : "") + "\">⚠ " + n.text + "</div>";
+    }).join("");
+
     lastStats = {
-      footprintArea: footprintArea, floors: floors, floorsByHeight: floorsByHeight,
+      lotArea: lotArea, footprintArea: footprintArea, floors: floors, floorsByHeight: floorsByHeight,
       floorsByFAR: floorsByFAR, builtHeight: builtHeight, maxHeight: maxH,
       gfa: gfa, farAchieved: farAchieved, maxFAR: far, limitedBy: limitedBy,
       envelopeRatio: compactness,
     };
+    lastFootprint = footprint;
   }
 
   Object.keys(els).forEach(function (id) {
     els[id].addEventListener("input", regenerate);
   });
+  presetSelect.addEventListener("change", function () {
+    renderPresetSetbacks(PRESETS[presetSelect.value]);
+    regenerate();
+  });
 
-  // --- AI-assisted parsing: plain-English zoning description -> slider parameters ---
-  // Uses the visitor's own Anthropic API key, sent directly from the browser to
-  // Anthropic's API. The key is kept in localStorage only, never sent anywhere
-  // else, and never touches any server this project controls (there is none;
-  // this is a static site).
+  function setMode(next) {
+    mode = next;
+    modeSimpleBtn.classList.toggle("active", mode === "simple");
+    modeIrregularBtn.classList.toggle("active", mode === "irregular");
+    simpleControls.style.display = mode === "simple" ? "" : "none";
+    irregularControls.style.display = mode === "irregular" ? "" : "none";
+    regenerate();
+  }
+  modeSimpleBtn.addEventListener("click", function () { setMode("simple"); });
+  modeIrregularBtn.addEventListener("click", function () { setMode("irregular"); });
+  renderPresetSetbacks(PRESETS[presetSelect.value]);
+
+  // ==========================================================================
+  // Generation history: a visible, traceable record of every parse + review
+  // run this session (not persisted between visits, this is a demo, not a
+  // real project file).
+  // ==========================================================================
+
+  var historyLogEl = document.getElementById("history-log");
+  var historyEntries = [];
+
+  function logHistory(sourceLabel, stats) {
+    var entry = {
+      time: new Date(),
+      source: sourceLabel,
+      floors: stats.floors, gfa: Math.round(stats.gfa), far: fmt(stats.farAchieved),
+    };
+    historyEntries.unshift(entry);
+    if (historyEntries.length > 12) historyEntries.pop();
+    historyLogEl.innerHTML = historyEntries.map(function (e) {
+      var hh = e.time.getHours().toString().padStart(2, "0");
+      var mm = e.time.getMinutes().toString().padStart(2, "0");
+      var ss = e.time.getSeconds().toString().padStart(2, "0");
+      return "<div class=\"hist-row\"><span class=\"hist-time\">" + hh + ":" + mm + ":" + ss + "</span> &middot; " +
+        "<span class=\"hist-src\">" + e.source + "</span> &middot; " +
+        e.floors + " floors, " + e.gfa + " m&sup2; GFA, FAR " + e.far + "</div>";
+    }).join("");
+  }
+
+  // ==========================================================================
+  // AI-assisted parsing: plain-English zoning description -> slider
+  // parameters (simple-mode fields only; irregular parcel shapes are chosen
+  // via the presets above, a deterministic geometry capability kept separate
+  // from free-text parsing). Uses the visitor's own Anthropic API key, sent
+  // directly from the browser to Anthropic's API. The key is kept in
+  // localStorage only, never sent anywhere else, and never touches any
+  // server this project controls (there is none; this is a static site).
+  // ==========================================================================
+
   var aiText = document.getElementById("ai-text");
   var aiKey = document.getElementById("ai-key");
   var aiBtn = document.getElementById("ai-parse-btn");
+  var exampleBtn = document.getElementById("example-btn");
   var aiStatus = document.getElementById("ai-status");
   var aiCitations = document.getElementById("ai-citations");
   var aiReview = document.getElementById("ai-review");
+  var applyFixBtn = document.getElementById("apply-fix-btn");
+
+  var VANCOUVER_EXAMPLE = "RS-1 single-family lot in Vancouver, 33 feet by 122 feet (about 10m x 37m). " +
+    "Front yard setback 4.9m (16 ft), side yards 1.2m each, rear yard 10.7m (35 ft) or 40% of lot depth, " +
+    "whichever is less. Maximum building height 9.5m for two storeys under the outright approval, floor " +
+    "space ratio 0.7 (0.75 with a basement). Assume 3.2m floor-to-floor height.";
+
+  exampleBtn.addEventListener("click", function () {
+    aiText.value = VANCOUVER_EXAMPLE;
+  });
 
   var FIELD_LABELS = {
     lotWidth: "Lot width", lotDepth: "Lot depth",
@@ -281,11 +560,12 @@
     "{\"lotWidth\": {\"value\": number|null, \"source\": string|null, \"confidence\": \"high\"|\"medium\"|\"low\"|\"none\"}, " +
     "\"lotDepth\": {...}, \"setbackFront\": {...}, \"setbackSide\": {...}, \"setbackRear\": {...}, " +
     "\"maxHeight\": {...}, \"floorHeight\": {...}, \"maxFAR\": {...}}\n" +
-    "Rules: all lengths are in meters, maxFAR is a unitless ratio. \"value\" is your best numeric estimate, " +
-    "or null if you cannot find or reasonably infer it. \"source\" is a short quote (under 15 words) from the " +
-    "input text that justifies the value, or null if value is null. \"confidence\" is \"high\" if the text " +
-    "states the value directly, \"medium\" if inferred from context, \"low\" if it's a rough guess, \"none\" if " +
-    "value is null. Do not guess wildly: prefer null with low/none confidence over fabricated precision.";
+    "Rules: all lengths are in meters, convert feet if the source uses feet. maxFAR is a unitless ratio. " +
+    "\"value\" is your best numeric estimate, or null if you cannot find or reasonably infer it. \"source\" is " +
+    "a short quote (under 15 words) from the input text that justifies the value, or null if value is null. " +
+    "\"confidence\" is \"high\" if the text states the value directly, \"medium\" if inferred from context, " +
+    "\"low\" if it's a rough guess, \"none\" if value is null. Do not guess wildly: prefer null with low/none " +
+    "confidence over fabricated precision.";
 
   function applyParsedFields(fields) {
     var applied = [];
@@ -317,20 +597,28 @@
 
   // --- Step 2: an independent reviewer pass checks the generated massing
   // against the original text, mirroring the reviewer-agent pattern used to
-  // check compliance on generated proposals. ---
+  // check compliance on generated proposals, and can suggest a correction. ---
   var REVIEW_SYSTEM = "You are an independent reviewer checking whether a generated building massing is " +
     "consistent with the zoning description it was derived from. You will get the original text, the " +
     "parameters extracted from it, and the resulting generated massing. Respond with a single JSON object " +
     "only, no prose, in this exact shape: " +
-    "{\"verdict\": \"consistent\"|\"concerns\", \"notes\": string}. " +
+    "{\"verdict\": \"consistent\"|\"concerns\", \"notes\": string, " +
+    "\"suggestedFix\": {\"field\": \"lotWidth\"|\"lotDepth\"|\"setbackFront\"|\"setbackSide\"|\"setbackRear\"|" +
+    "\"maxHeight\"|\"floorHeight\"|\"maxFAR\"|null, \"value\": number|null, \"reason\": string|null}}. " +
     "\"notes\" is one or two short sentences. Flag it as \"concerns\" if a stated constraint was not " +
     "reflected in the result, if a value had to be guessed with low confidence, or if the achieved FAR or " +
-    "height differs meaningfully from what was asked for.";
+    "height differs meaningfully from what was asked for. If you flag \"concerns\" and can identify a single " +
+    "specific field whose corrected value would resolve it, fill in \"suggestedFix\" with that field, its " +
+    "corrected value, and a short reason; otherwise leave suggestedFix's fields null.";
+
+  var pendingFix = null;
 
   function runReview(key, originalText, fields, stats) {
     aiReview.style.display = "block";
     aiReview.className = "busy";
     aiReview.innerHTML = "<div class=\"rev-title\">Reviewer check</div>Checking the massing against the description…";
+    applyFixBtn.style.display = "none";
+    pendingFix = null;
 
     var summary = "ORIGINAL DESCRIPTION:\n" + originalText + "\n\nEXTRACTED PARAMETERS:\n" +
       JSON.stringify(fields, null, 2) + "\n\nGENERATED RESULT:\n" +
@@ -340,21 +628,41 @@
       "FAR achieved: " + fmt(stats.farAchieved) + " of " + fmt(stats.maxFAR) + " max\n" +
       "Limited by: " + stats.limitedBy;
 
-    return callClaude(key, REVIEW_SYSTEM, summary, 250)
+    return callClaude(key, REVIEW_SYSTEM, summary, 350)
       .then(function (review) {
         var verdict = review.verdict === "concerns" ? "concerns" : "consistent";
         aiReview.className = verdict;
         aiReview.innerHTML = "<div class=\"rev-title\">Reviewer check: " +
           (verdict === "concerns" ? "⚠ concerns" : "✓ consistent") + "</div>" +
           (review.notes || "");
+
+        var fix = review.suggestedFix;
+        if (verdict === "concerns" && fix && fix.field && FIELD_MAP[fix.field] && typeof fix.value === "number") {
+          pendingFix = fix;
+          applyFixBtn.textContent = "Apply reviewer's fix: " + FIELD_LABELS[fix.field] + " → " + fmt(fix.value);
+          applyFixBtn.style.display = "block";
+        }
+
+        logHistory(mode === "simple" ? "AI parse + review" : "AI parse + review (irregular parcel)", lastStats);
       })
       .catch(function (err) {
         aiReview.className = "";
         aiReview.style.display = "none";
         // Reviewer failing shouldn't hide the already-applied parse results.
+        logHistory("AI parse (reviewer unavailable)", lastStats);
         console.error("Reviewer check failed:", err.message);
       });
   }
+
+  applyFixBtn.addEventListener("click", function () {
+    if (!pendingFix) return;
+    var sliderId = FIELD_MAP[pendingFix.field];
+    els[sliderId].value = clampToSlider(sliderId, pendingFix.value);
+    regenerate();
+    logHistory("Reviewer fix applied: " + FIELD_LABELS[pendingFix.field], lastStats);
+    applyFixBtn.style.display = "none";
+    pendingFix = null;
+  });
 
   aiBtn.addEventListener("click", function () {
     var text = aiText.value.trim();
@@ -368,7 +676,10 @@
     aiBtn.disabled = true;
     aiCitations.innerHTML = "";
     aiReview.style.display = "none";
+    applyFixBtn.style.display = "none";
     setStatus("Asking Claude to read the description…", "busy");
+
+    if (mode !== "simple") setMode("simple"); // AI parsing targets the simple rectangular model
 
     callClaude(key, PARSE_SYSTEM, text, 500)
       .then(function (fields) {

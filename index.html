@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Parametric Massing Generator</title>
-<meta name="description" content="A small computational design tool that generates a buildable massing envelope from lot dimensions, setbacks, height limits, and FAR.">
+<meta name="description" content="A computational design tool that generates a buildable massing envelope, on rectangular or irregular parcels, from zoning constraints, with AI-assisted parsing, citations, and an independent reviewer pass.">
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -17,14 +17,14 @@
   #viewport { flex: 1; position: relative; min-width: 0; }
   #viewport canvas { display: block; width: 100%; height: 100%; }
   #panel {
-    width: 320px; flex-shrink: 0;
+    width: 340px; flex-shrink: 0;
     padding: 22px 20px 20px;
     background: #14171b;
     border-left: 1px solid #262b31;
     overflow-y: auto;
   }
   h1 { font-size: 16px; margin: 0 0 4px; font-weight: 700; letter-spacing: .2px; }
-  .subtitle { font-size: 12px; color: #8b9199; margin: 0 0 20px; line-height: 1.5; }
+  .subtitle { font-size: 12px; color: #8b9199; margin: 0 0 16px; line-height: 1.5; }
   .group { margin-bottom: 18px; }
   .group label {
     display: flex; justify-content: space-between; align-items: baseline;
@@ -34,13 +34,30 @@
   input[type=range] {
     width: 100%; accent-color: #e07b5a; height: 4px; cursor: pointer;
   }
+  select {
+    width: 100%; background: #0f1215; color: #e7e7e5; border: 1px solid #2a3138;
+    border-radius: 5px; padding: 7px 8px; font-size: 12px; font-family: inherit;
+  }
   hr { border: none; border-top: 1px solid #262b31; margin: 18px 0; }
   #stats { font-size: 12px; line-height: 1.9; color: #c3c8cd; }
   #stats b { color: #fff; font-variant-numeric: tabular-nums; }
   #stats .warn { color: #e0a25a; }
   #stats .ok { color: #7fbf6a; }
+  #perf-notes { font-size: 11px; color: #8b9199; line-height: 1.6; margin-top: 8px; }
+  #perf-notes .pn-row { margin-bottom: 3px; }
+  #perf-notes .pn-flag { color: #e0a25a; }
   .foot { margin-top: 20px; font-size: 11px; color: #5c636b; line-height: 1.6; }
   .foot a { color: #e07b5a; text-decoration: none; }
+
+  /* mode toggle */
+  #mode-toggle { display: flex; gap: 6px; margin-bottom: 16px; }
+  #mode-toggle button {
+    flex: 1; background: #191d22; color: #8b9199; border: 1px solid #262b31;
+    border-radius: 6px; padding: 8px 6px; font-size: 11.5px; font-weight: 600; cursor: pointer;
+  }
+  #mode-toggle button.active { background: #e07b5a; color: #14171b; border-color: #e07b5a; }
+
+  /* AI box */
   #ai-box { background: #191d22; border: 1px solid #262b31; border-radius: 8px; padding: 12px; margin-bottom: 18px; }
   #ai-box .ai-title { font-size: 12px; font-weight: 700; color: #e7e7e5; margin-bottom: 4px; }
   #ai-box .ai-hint { font-size: 11px; color: #8b9199; line-height: 1.5; margin-bottom: 8px; }
@@ -53,8 +70,13 @@
     width: 100%; margin-bottom: 8px; background: #0f1215; color: #e7e7e5;
     border: 1px solid #2a3138; border-radius: 5px; padding: 7px 8px; font-size: 12px;
   }
+  .btn-row { display: flex; gap: 6px; margin-bottom: 8px; }
+  #example-btn {
+    flex: 0 0 auto; background: #0f1215; color: #8b9199; border: 1px solid #2a3138;
+    border-radius: 5px; padding: 8px 10px; font-size: 11px; cursor: pointer; white-space: nowrap;
+  }
   #ai-parse-btn {
-    width: 100%; background: #e07b5a; color: #14171b; border: none; border-radius: 5px;
+    flex: 1; background: #e07b5a; color: #14171b; border: none; border-radius: 5px;
     padding: 8px; font-size: 12px; font-weight: 700; cursor: pointer;
   }
   #ai-parse-btn:disabled { opacity: 0.5; cursor: default; }
@@ -75,59 +97,113 @@
   #ai-review.concerns { background: rgba(224,162,90,0.1); border: 1px solid rgba(224,162,90,0.35); color: #e0c39f; }
   #ai-review.busy { background: #191d22; border: 1px solid #262b31; color: #8b9199; }
   #ai-review .rev-title { font-weight: 700; margin-bottom: 3px; }
+  #apply-fix-btn {
+    display: none; margin-top: 8px; width: 100%; background: #2a3138; color: #e7e7e5;
+    border: 1px solid #3a4148; border-radius: 5px; padding: 7px; font-size: 11.5px;
+    font-weight: 600; cursor: pointer;
+  }
+
+  /* history log */
+  #history-box { margin-top: 16px; }
+  #history-box .hist-title { font-size: 12px; font-weight: 700; color: #c3c8cd; margin-bottom: 6px; }
+  #history-log { font-size: 11px; color: #8b9199; line-height: 1.6; max-height: 160px; overflow-y: auto; }
+  #history-log .hist-row { padding: 6px 0; border-top: 1px solid #20252b; }
+  #history-log .hist-row:first-child { border-top: none; }
+  #history-log .hist-time { color: #5c636b; font-variant-numeric: tabular-nums; }
+  #history-log .hist-src { color: #c3c8cd; }
+  #history-log .hist-empty { color: #5c636b; font-style: italic; }
+
+  /* 2D plan inset */
+  #plan-view {
+    position: absolute; left: 14px; bottom: 14px; width: 220px; height: 220px;
+    background: rgba(15,18,21,0.88); border: 1px solid #262b31; border-radius: 8px;
+    backdrop-filter: blur(4px); padding: 6px;
+  }
+  #plan-view .plan-label {
+    position: absolute; top: 6px; left: 10px; font-size: 9.5px; letter-spacing: 1px;
+    color: #6b7178; text-transform: uppercase;
+  }
+  #plan-view svg { width: 100%; height: 100%; }
+
   @media (max-width: 720px) {
     #app { flex-direction: column; }
     #panel { width: 100%; border-left: none; border-top: 1px solid #262b31; max-height: 55vh; }
+    #plan-view { width: 140px; height: 140px; }
   }
 </style>
 </head>
 <body>
 <div id="app">
-  <div id="viewport"></div>
+  <div id="viewport">
+    <div id="plan-view"><span class="plan-label">Plan view</span><div id="plan-svg-container"></div></div>
+  </div>
   <div id="panel">
     <h1>Parametric Massing Generator</h1>
-    <p class="subtitle">Adjust the lot and zoning envelope by hand below, or describe it in plain English and let AI fill in the sliders.</p>
+    <p class="subtitle">Generates a buildable massing envelope from zoning constraints, on a rectangular or an irregular parcel, with AI-assisted parsing, source citations, and an independent reviewer pass.</p>
 
     <div id="ai-box">
       <div class="ai-title">Parse from a zoning description</div>
       <div class="ai-hint">Paste a bylaw excerpt or describe the lot in your own words. Uses your own Anthropic API key, sent directly from your browser to Anthropic, never stored or seen by this site.</div>
       <textarea id="ai-text" placeholder="e.g. 24m x 36m lot, 4.5m front setback, 1.5m side setbacks, 6m rear setback, 14m height limit, FAR 1.8"></textarea>
       <input type="password" id="ai-key" placeholder="Your Anthropic API key (sk-ant-...)" autocomplete="off">
-      <button id="ai-parse-btn">Parse with AI</button>
+      <div class="btn-row">
+        <button id="example-btn" title="Fill in an example description based on a Vancouver RS-zone style bylaw">Vancouver example</button>
+        <button id="ai-parse-btn">Parse with AI</button>
+      </div>
       <div id="ai-status"></div>
       <div id="ai-citations"></div>
       <div id="ai-review"></div>
+      <button id="apply-fix-btn">Apply reviewer's suggested fix</button>
     </div>
 
-    <div class="group">
-      <label>Lot width <span class="val" id="v-lotW"></span></label>
-      <input type="range" id="lotW" min="10" max="60" step="1" value="24">
-    </div>
-    <div class="group">
-      <label>Lot depth <span class="val" id="v-lotD"></span></label>
-      <input type="range" id="lotD" min="10" max="80" step="1" value="36">
+    <div id="mode-toggle">
+      <button id="mode-simple" class="active" type="button">Simple lot</button>
+      <button id="mode-irregular" type="button">Irregular parcel</button>
     </div>
 
-    <hr>
+    <div id="simple-controls">
+      <div class="group">
+        <label>Lot width <span class="val" id="v-lotW"></span></label>
+        <input type="range" id="lotW" min="10" max="60" step="0.1" value="24">
+      </div>
+      <div class="group">
+        <label>Lot depth <span class="val" id="v-lotD"></span></label>
+        <input type="range" id="lotD" min="10" max="80" step="0.1" value="36">
+      </div>
 
-    <div class="group">
-      <label>Front setback <span class="val" id="v-setF"></span></label>
-      <input type="range" id="setF" min="0" max="12" step="0.5" value="4.5">
+      <hr>
+
+      <div class="group">
+        <label>Front setback <span class="val" id="v-setF"></span></label>
+        <input type="range" id="setF" min="0" max="12" step="0.1" value="4.5">
+      </div>
+      <div class="group">
+        <label>Side setback (each side) <span class="val" id="v-setS"></span></label>
+        <input type="range" id="setS" min="0" max="8" step="0.1" value="1.5">
+      </div>
+      <div class="group">
+        <label>Rear setback <span class="val" id="v-setR"></span></label>
+        <input type="range" id="setR" min="0" max="12" step="0.1" value="6">
+      </div>
     </div>
-    <div class="group">
-      <label>Side setback (each side) <span class="val" id="v-setS"></span></label>
-      <input type="range" id="setS" min="0" max="8" step="0.5" value="1.5">
-    </div>
-    <div class="group">
-      <label>Rear setback <span class="val" id="v-setR"></span></label>
-      <input type="range" id="setR" min="0" max="12" step="0.5" value="6">
+
+    <div id="irregular-controls" style="display:none;">
+      <div class="group">
+        <label>Parcel shape</label>
+        <select id="preset-select">
+          <option value="corner">Corner lot (chamfered street corner)</option>
+          <option value="flag">Narrow-frontage lot</option>
+          <option value="triangle">Triangular corner lot (diagonal intersection)</option>
+        </select>
+      </div>
+      <div id="preset-setbacks" style="font-size:11px;color:#8b9199;line-height:1.7;"></div>
     </div>
 
     <hr>
 
     <div class="group">
       <label>Max height <span class="val" id="v-maxH"></span></label>
-      <input type="range" id="maxH" min="3.5" max="45" step="0.5" value="14">
+      <input type="range" id="maxH" min="3.5" max="45" step="0.1" value="14">
     </div>
     <div class="group">
       <label>Floor-to-floor height <span class="val" id="v-floorH"></span></label>
@@ -141,9 +217,15 @@
     <hr>
 
     <div id="stats"></div>
+    <div id="perf-notes"></div>
+
+    <div id="history-box">
+      <div class="hist-title">Generation history (traceable record)</div>
+      <div id="history-log"><div class="hist-empty">Nothing generated yet this session.</div></div>
+    </div>
 
     <div class="foot">
-      Buildable envelope only, a first-pass generative check before detailed design. Built with Three.js.
+      Buildable envelope only, a first-pass generative check before detailed design. Height/construction-type and daylighting notes are simplified rules of thumb, not code-compliance advice. Built with Three.js.
       <br><a href="https://github.com/RomanJahandideh/parametric-massing-generator" target="_blank" rel="noopener">View source on GitHub &rarr;</a>
     </div>
   </div>
