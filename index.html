@@ -62,6 +62,19 @@
   #ai-status.err { color: #e0705a; }
   #ai-status.ok { color: #7fbf6a; }
   #ai-status.busy { color: #8b9199; }
+  #ai-citations { margin-top: 8px; font-size: 11px; color: #8b9199; line-height: 1.6; }
+  #ai-citations .cite-row { margin-bottom: 2px; }
+  #ai-citations .cite-field { color: #c3c8cd; }
+  #ai-citations .cite-quote { color: #6b7178; font-style: italic; }
+  #ai-citations .conf-low { color: #e0a25a; }
+  #ai-review {
+    margin-top: 10px; padding: 9px 10px; border-radius: 6px; font-size: 11px; line-height: 1.55;
+    display: none;
+  }
+  #ai-review.consistent { background: rgba(127,191,106,0.1); border: 1px solid rgba(127,191,106,0.3); color: #b6d9ac; }
+  #ai-review.concerns { background: rgba(224,162,90,0.1); border: 1px solid rgba(224,162,90,0.35); color: #e0c39f; }
+  #ai-review.busy { background: #191d22; border: 1px solid #262b31; color: #8b9199; }
+  #ai-review .rev-title { font-weight: 700; margin-bottom: 3px; }
   @media (max-width: 720px) {
     #app { flex-direction: column; }
     #panel { width: 100%; border-left: none; border-top: 1px solid #262b31; max-height: 55vh; }
@@ -82,6 +95,8 @@
       <input type="password" id="ai-key" placeholder="Your Anthropic API key (sk-ant-...)" autocomplete="off">
       <button id="ai-parse-btn">Parse with AI</button>
       <div id="ai-status"></div>
+      <div id="ai-citations"></div>
+      <div id="ai-review"></div>
     </div>
 
     <div class="group">

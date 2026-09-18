@@ -94,6 +94,7 @@
     els[id] = document.getElementById(id);
   });
   var statsEl = document.getElementById("stats");
+  var lastStats = null; // populated by regenerate(), read by the reviewer AI call
 
   function fmt(n, unit) {
     return (Math.round(n * 10) / 10) + (unit || "");
@@ -165,13 +166,30 @@
     target.set(0, builtHeight / 2, 0);
     updateCamera();
 
+    // Envelope compactness: exterior surface area (walls + flat roof) per m2
+    // of floor area. A simple, honest architectural performance proxy, lower
+    // means less exposed surface per unit of floor area to gain/lose heat
+    // through, not a certified energy model.
+    var wallArea = 2 * (footprintW + footprintD) * builtHeight;
+    var roofArea = footprintW * footprintD;
+    var envelopeArea = wallArea + roofArea;
+    var compactness = gfa > 0 ? envelopeArea / gfa : 0;
+
     statsEl.innerHTML =
       "Buildable footprint: <b>" + fmt(footprintArea) + " m&sup2;</b><br>" +
       "Floors: <b>" + floors + "</b> (" + floorsByHeight + " by height, " + floorsByFAR + " by FAR)<br>" +
       "Built height: <b>" + fmt(builtHeight, " m") + "</b> of " + fmt(maxH, " m") + " max<br>" +
       "Gross floor area: <b>" + fmt(gfa) + " m&sup2;</b><br>" +
       "FAR achieved: <b>" + fmt(farAchieved) + "</b> of " + fmt(far) + " max<br>" +
+      "Envelope ratio: <b>" + fmt(compactness) + "</b> m&sup2; surface / m&sup2; floor<br>" +
       "<span class=\"" + (floors === 0 ? "warn" : "ok") + "\">Limited by: " + limitedBy + "</span>";
+
+    lastStats = {
+      footprintArea: footprintArea, floors: floors, floorsByHeight: floorsByHeight,
+      floorsByFAR: floorsByFAR, builtHeight: builtHeight, maxHeight: maxH,
+      gfa: gfa, farAchieved: farAchieved, maxFAR: far, limitedBy: limitedBy,
+      envelopeRatio: compactness,
+    };
   }
 
   Object.keys(els).forEach(function (id) {
@@ -187,12 +205,20 @@
   var aiKey = document.getElementById("ai-key");
   var aiBtn = document.getElementById("ai-parse-btn");
   var aiStatus = document.getElementById("ai-status");
+  var aiCitations = document.getElementById("ai-citations");
+  var aiReview = document.getElementById("ai-review");
 
+  var FIELD_LABELS = {
+    lotWidth: "Lot width", lotDepth: "Lot depth",
+    setbackFront: "Front setback", setbackSide: "Side setback", setbackRear: "Rear setback",
+    maxHeight: "Max height", floorHeight: "Floor-to-floor height", maxFAR: "Max FAR",
+  };
   var FIELD_MAP = {
     lotWidth: "lotW", lotDepth: "lotD",
     setbackFront: "setF", setbackSide: "setS", setbackRear: "setR",
     maxHeight: "maxH", floorHeight: "floorH", maxFAR: "far",
   };
+  var FIELD_KEYS = Object.keys(FIELD_MAP);
 
   try {
     var savedKey = localStorage.getItem("pmg_anthropic_key");
@@ -210,10 +236,62 @@
     return Math.max(min, Math.min(max, value));
   }
 
+  function callClaude(key, systemPrompt, userContent, maxTokens) {
+    // Anthropic's API blocks direct browser requests unless this header opts
+    // in. It's meant for exactly this pattern: a visitor's own key, used only
+    // in their own browser session, never seen by this site or any server it
+    // runs (there is no server; this is a static site).
+    return fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: maxTokens,
+        system: systemPrompt,
+        messages: [
+          { role: "user", content: userContent },
+          { role: "assistant", content: "{" }, // prefill forces a bare JSON object back
+        ],
+      }),
+    }).then(function (res) {
+      if (!res.ok) {
+        return res.json().catch(function () { return null; }).then(function (body) {
+          var msg = (body && body.error && body.error.message) || (res.status + " " + res.statusText);
+          throw new Error(msg);
+        });
+      }
+      return res.json();
+    }).then(function (data) {
+      var block = data.content && data.content[0];
+      var content = block && block.text;
+      if (!content) throw new Error("No content in response.");
+      try { return JSON.parse("{" + content); } catch (e) { throw new Error("Model did not return valid JSON."); }
+    });
+  }
+
+  // --- Step 1: parse plain-English text into cited, confidence-scored fields ---
+  var PARSE_SYSTEM = "You extract zoning envelope parameters from a text description of a building lot, " +
+    "citing your source for each value you find. Respond with a single JSON object only, no prose, " +
+    "in this exact shape (all 8 keys always present):\n" +
+    "{\"lotWidth\": {\"value\": number|null, \"source\": string|null, \"confidence\": \"high\"|\"medium\"|\"low\"|\"none\"}, " +
+    "\"lotDepth\": {...}, \"setbackFront\": {...}, \"setbackSide\": {...}, \"setbackRear\": {...}, " +
+    "\"maxHeight\": {...}, \"floorHeight\": {...}, \"maxFAR\": {...}}\n" +
+    "Rules: all lengths are in meters, maxFAR is a unitless ratio. \"value\" is your best numeric estimate, " +
+    "or null if you cannot find or reasonably infer it. \"source\" is a short quote (under 15 words) from the " +
+    "input text that justifies the value, or null if value is null. \"confidence\" is \"high\" if the text " +
+    "states the value directly, \"medium\" if inferred from context, \"low\" if it's a rough guess, \"none\" if " +
+    "value is null. Do not guess wildly: prefer null with low/none confidence over fabricated precision.";
+
   function applyParsedFields(fields) {
     var applied = [];
-    Object.keys(FIELD_MAP).forEach(function (key) {
-      var v = fields[key];
+    FIELD_KEYS.forEach(function (key) {
+      var f = fields[key];
+      var v = f && f.value;
       if (typeof v === "number" && isFinite(v)) {
         var sliderId = FIELD_MAP[key];
         els[sliderId].value = clampToSlider(sliderId, v);
@@ -222,6 +300,60 @@
     });
     regenerate();
     return applied;
+  }
+
+  function renderCitations(fields) {
+    var rows = FIELD_KEYS.filter(function (key) {
+      return fields[key] && typeof fields[key].value === "number";
+    }).map(function (key) {
+      var f = fields[key];
+      var confClass = (f.confidence === "low" || f.confidence === "medium") ? " conf-low" : "";
+      var quote = f.source ? "“" + f.source + "”" : "no direct source";
+      return "<div class=\"cite-row\"><span class=\"cite-field" + confClass + "\">" + FIELD_LABELS[key] +
+        "</span> (" + f.confidence + "): <span class=\"cite-quote\">" + quote + "</span></div>";
+    });
+    aiCitations.innerHTML = rows.join("");
+  }
+
+  // --- Step 2: an independent reviewer pass checks the generated massing
+  // against the original text, mirroring the reviewer-agent pattern used to
+  // check compliance on generated proposals. ---
+  var REVIEW_SYSTEM = "You are an independent reviewer checking whether a generated building massing is " +
+    "consistent with the zoning description it was derived from. You will get the original text, the " +
+    "parameters extracted from it, and the resulting generated massing. Respond with a single JSON object " +
+    "only, no prose, in this exact shape: " +
+    "{\"verdict\": \"consistent\"|\"concerns\", \"notes\": string}. " +
+    "\"notes\" is one or two short sentences. Flag it as \"concerns\" if a stated constraint was not " +
+    "reflected in the result, if a value had to be guessed with low confidence, or if the achieved FAR or " +
+    "height differs meaningfully from what was asked for.";
+
+  function runReview(key, originalText, fields, stats) {
+    aiReview.style.display = "block";
+    aiReview.className = "busy";
+    aiReview.innerHTML = "<div class=\"rev-title\">Reviewer check</div>Checking the massing against the description…";
+
+    var summary = "ORIGINAL DESCRIPTION:\n" + originalText + "\n\nEXTRACTED PARAMETERS:\n" +
+      JSON.stringify(fields, null, 2) + "\n\nGENERATED RESULT:\n" +
+      "Floors: " + stats.floors + " (" + stats.floorsByHeight + " allowed by height, " + stats.floorsByFAR + " allowed by FAR)\n" +
+      "Built height: " + fmt(stats.builtHeight) + "m of " + fmt(stats.maxHeight) + "m max\n" +
+      "Gross floor area: " + fmt(stats.gfa) + "m2\n" +
+      "FAR achieved: " + fmt(stats.farAchieved) + " of " + fmt(stats.maxFAR) + " max\n" +
+      "Limited by: " + stats.limitedBy;
+
+    return callClaude(key, REVIEW_SYSTEM, summary, 250)
+      .then(function (review) {
+        var verdict = review.verdict === "concerns" ? "concerns" : "consistent";
+        aiReview.className = verdict;
+        aiReview.innerHTML = "<div class=\"rev-title\">Reviewer check: " +
+          (verdict === "concerns" ? "⚠ concerns" : "✓ consistent") + "</div>" +
+          (review.notes || "");
+      })
+      .catch(function (err) {
+        aiReview.className = "";
+        aiReview.style.display = "none";
+        // Reviewer failing shouldn't hide the already-applied parse results.
+        console.error("Reviewer check failed:", err.message);
+      });
   }
 
   aiBtn.addEventListener("click", function () {
@@ -234,65 +366,26 @@
     try { localStorage.setItem("pmg_anthropic_key", key); } catch (e) { /* ignore */ }
 
     aiBtn.disabled = true;
+    aiCitations.innerHTML = "";
+    aiReview.style.display = "none";
     setStatus("Asking Claude to read the description…", "busy");
 
-    var systemPrompt = "You extract zoning envelope parameters from a text description of a building lot. " +
-      "Respond with a single JSON object only, no prose, matching this shape: " +
-      "{\"lotWidth\": number|null, \"lotDepth\": number|null, \"setbackFront\": number|null, " +
-      "\"setbackSide\": number|null, \"setbackRear\": number|null, \"maxHeight\": number|null, " +
-      "\"floorHeight\": number|null, \"maxFAR\": number|null}. " +
-      "All lengths are in meters. maxFAR is a unitless ratio. " +
-      "If a value is not mentioned or cannot be inferred, use null for it. Do not guess wildly; " +
-      "only fill in values you can reasonably infer from the text.";
-
-    // Anthropic's API blocks direct browser requests unless this header opts in.
-    // It's meant for exactly this pattern: a visitor's own key, used only in
-    // their own browser session, never seen by this site or any server it runs.
-    fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": key,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 300,
-        system: systemPrompt,
-        messages: [
-          { role: "user", content: text },
-          { role: "assistant", content: "{" }, // prefill forces a bare JSON object back
-        ],
-      }),
-    })
-      .then(function (res) {
-        if (!res.ok) {
-          return res.json().catch(function () { return null; }).then(function (body) {
-            var msg = (body && body.error && body.error.message) || (res.status + " " + res.statusText);
-            throw new Error(msg);
-          });
-        }
-        return res.json();
-      })
-      .then(function (data) {
-        var block = data.content && data.content[0];
-        var content = block && block.text;
-        if (!content) throw new Error("No content in response.");
-        // The prefill "{" isn't echoed back, so stitch it back on before parsing.
-        var fields;
-        try { fields = JSON.parse("{" + content); } catch (e) { throw new Error("Model did not return valid JSON."); }
+    callClaude(key, PARSE_SYSTEM, text, 500)
+      .then(function (fields) {
         var applied = applyParsedFields(fields);
         if (applied.length === 0) {
           setStatus("Couldn't find any zoning values in that text. Try being more specific.", "err");
-        } else {
-          setStatus("Applied " + applied.length + " value" + (applied.length === 1 ? "" : "s") + " from the description: " + applied.join(", ") + ".", "ok");
+          aiBtn.disabled = false;
+          return;
         }
+        setStatus("Applied " + applied.length + " value" + (applied.length === 1 ? "" : "s") + " from the description.", "ok");
+        renderCitations(fields);
+        aiBtn.disabled = false;
+        // Kick off the reviewer pass against the freshly computed stats.
+        runReview(key, text, fields, lastStats);
       })
       .catch(function (err) {
         setStatus("Couldn't parse that: " + err.message, "err");
-      })
-      .finally(function () {
         aiBtn.disabled = false;
       });
   });
