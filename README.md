@@ -1,8 +1,19 @@
 # Parametric Massing Generator
 
-A computational design tool that generates a buildable massing envelope from zoning constraints, from a single rectangular lot up to a whole AI-zoned urban block, with conversational AI-assisted parsing and refinement, source citations, an independent reviewer pass, and a multi-view (3D + plan) output.
+A computational design tool that generates a buildable massing envelope from zoning constraints, from a single rectangular lot up to a whole AI-zoned urban block, with agentic AI-assisted parsing and conversational refinement, source citations, an independent reviewer pass, structured conditional rules, and a multi-view (3D + plan) output.
 
-**Try it live:** open `index.html` in a browser, or serve the folder with any static file server.
+**Try it live:** [romanjahandideh.github.io/parametric-massing-generator](https://romanjahandideh.github.io/parametric-massing-generator/) (no build step needed to run locally either, see "Run it locally" below).
+
+## How to test it
+
+You'll need your own Anthropic API key for the AI features (entered on the page, sent directly to Anthropic, never to this site, see "AI-assisted parsing" below); the sliders and mode switching work with no key at all.
+
+1. **Simple lot, no AI.** Drag the sliders (lot width, setbacks, height, FAR). The 3D massing and the 2D plan view should update instantly, and the stats panel should show which constraint (height or FAR) is currently binding.
+2. **AI parsing with citations.** Click "Vancouver example" to fill in a real bylaw-style description, then "Parse with AI." You should see each field applied with the exact phrase it was read from and a confidence level, followed by an independent reviewer verdict underneath.
+3. **Conversational refinement.** After a parse, type something like *"make it one storey taller"* into the refine box. Only the height should change, everything else should hold, and it should show up as a new turn in the conversation log and the generation history.
+4. **A real, conditional zoning district.** Switch the "Zoning preset" dropdown to "Vancouver R1-1 multiplex." The setback, height, and FAR sliders should snap to the district's real base provisions. Toggle the rental-bonus checkbox, FAR should jump from 0.70 to 1.00, that's the bylaw's actual conditional rule, not a fixed number. Try shrinking the lot width below 10m and watch the eligibility note change to a warning.
+5. **Irregular parcel geometry.** Switch to "Irregular parcel" mode and try each preset (corner, flag, triangular lot). The buildable footprint should follow the parcel's actual shape, not a bounding box.
+6. **Urban block, AI-zoned.** Switch to "Urban block" mode, type a zoning instruction like *"commercial along the south edge, a park in the northeast corner,"* and click "Classify zones with AI." Parcels should render in different colors by use, with the north-facing side (top of the plan view) matching whatever you asked for.
 
 ## What it does
 
