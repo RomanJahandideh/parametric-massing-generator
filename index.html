@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parametric Massing Generator</title>
+<meta name="description" content="A small computational design tool that generates a buildable massing envelope from lot dimensions, setbacks, height limits, and FAR.">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #0b0d10; color: #e7e7e5;
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  #app { display: flex; height: 100%; width: 100%; }
+  #viewport { flex: 1; position: relative; min-width: 0; }
+  #viewport canvas { display: block; width: 100%; height: 100%; }
+  #panel {
+    width: 320px; flex-shrink: 0;
+    padding: 22px 20px 20px;
+    background: #14171b;
+    border-left: 1px solid #262b31;
+    overflow-y: auto;
+  }
+  h1 { font-size: 16px; margin: 0 0 4px; font-weight: 700; letter-spacing: .2px; }
+  .subtitle { font-size: 12px; color: #8b9199; margin: 0 0 20px; line-height: 1.5; }
+  .group { margin-bottom: 18px; }
+  .group label {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 12px; color: #c3c8cd; margin-bottom: 6px;
+  }
+  .group label span.val { color: #e07b5a; font-weight: 600; font-variant-numeric: tabular-nums; }
+  input[type=range] {
+    width: 100%; accent-color: #e07b5a; height: 4px; cursor: pointer;
+  }
+  hr { border: none; border-top: 1px solid #262b31; margin: 18px 0; }
+  #stats { font-size: 12px; line-height: 1.9; color: #c3c8cd; }
+  #stats b { color: #fff; font-variant-numeric: tabular-nums; }
+  #stats .warn { color: #e0a25a; }
+  #stats .ok { color: #7fbf6a; }
+  .foot { margin-top: 20px; font-size: 11px; color: #5c636b; line-height: 1.6; }
+  .foot a { color: #e07b5a; text-decoration: none; }
+  @media (max-width: 720px) {
+    #app { flex-direction: column; }
+    #panel { width: 100%; border-left: none; border-top: 1px solid #262b31; max-height: 55vh; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="viewport"></div>
+  <div id="panel">
+    <h1>Parametric Massing Generator</h1>
+    <p class="subtitle">Adjust the lot and zoning envelope. The massing regenerates live from setbacks, height limit, and floor area ratio (FAR).</p>
+
+    <div class="group">
+      <label>Lot width <span class="val" id="v-lotW"></span></label>
+      <input type="range" id="lotW" min="10" max="60" step="1" value="24">
+    </div>
+    <div class="group">
+      <label>Lot depth <span class="val" id="v-lotD"></span></label>
+      <input type="range" id="lotD" min="10" max="80" step="1" value="36">
+    </div>
+
+    <hr>
+
+    <div class="group">
+      <label>Front setback <span class="val" id="v-setF"></span></label>
+      <input type="range" id="setF" min="0" max="12" step="0.5" value="4.5">
+    </div>
+    <div class="group">
+      <label>Side setback (each side) <span class="val" id="v-setS"></span></label>
+      <input type="range" id="setS" min="0" max="8" step="0.5" value="1.5">
+    </div>
+    <div class="group">
+      <label>Rear setback <span class="val" id="v-setR"></span></label>
+      <input type="range" id="setR" min="0" max="12" step="0.5" value="6">
+    </div>
+
+    <hr>
+
+    <div class="group">
+      <label>Max height <span class="val" id="v-maxH"></span></label>
+      <input type="range" id="maxH" min="3.5" max="45" step="0.5" value="14">
+    </div>
+    <div class="group">
+      <label>Floor-to-floor height <span class="val" id="v-floorH"></span></label>
+      <input type="range" id="floorH" min="2.7" max="4.5" step="0.1" value="3.5">
+    </div>
+    <div class="group">
+      <label>Max FAR <span class="val" id="v-far"></span></label>
+      <input type="range" id="far" min="0.3" max="6" step="0.1" value="1.8">
+    </div>
+
+    <hr>
+
+    <div id="stats"></div>
+
+    <div class="foot">
+      Buildable envelope only, a first-pass generative check before detailed design. Built with Three.js.
+      <br><a href="https://github.com/RomanJahandideh/parametric-massing-generator" target="_blank" rel="noopener">View source on GitHub &rarr;</a>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="main.js"></script>
+</body>
+</html>
