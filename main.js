@@ -178,6 +178,125 @@
     els[id].addEventListener("input", regenerate);
   });
 
+  // --- AI-assisted parsing: plain-English zoning description -> slider parameters ---
+  // Uses the visitor's own Anthropic API key, sent directly from the browser to
+  // Anthropic's API. The key is kept in localStorage only, never sent anywhere
+  // else, and never touches any server this project controls (there is none;
+  // this is a static site).
+  var aiText = document.getElementById("ai-text");
+  var aiKey = document.getElementById("ai-key");
+  var aiBtn = document.getElementById("ai-parse-btn");
+  var aiStatus = document.getElementById("ai-status");
+
+  var FIELD_MAP = {
+    lotWidth: "lotW", lotDepth: "lotD",
+    setbackFront: "setF", setbackSide: "setS", setbackRear: "setR",
+    maxHeight: "maxH", floorHeight: "floorH", maxFAR: "far",
+  };
+
+  try {
+    var savedKey = localStorage.getItem("pmg_anthropic_key");
+    if (savedKey) aiKey.value = savedKey;
+  } catch (e) { /* localStorage unavailable (private mode, etc.) - ignore */ }
+
+  function setStatus(msg, kind) {
+    aiStatus.textContent = msg;
+    aiStatus.className = kind || "";
+  }
+
+  function clampToSlider(id, value) {
+    var el = els[id];
+    var min = parseFloat(el.min), max = parseFloat(el.max);
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function applyParsedFields(fields) {
+    var applied = [];
+    Object.keys(FIELD_MAP).forEach(function (key) {
+      var v = fields[key];
+      if (typeof v === "number" && isFinite(v)) {
+        var sliderId = FIELD_MAP[key];
+        els[sliderId].value = clampToSlider(sliderId, v);
+        applied.push(key);
+      }
+    });
+    regenerate();
+    return applied;
+  }
+
+  aiBtn.addEventListener("click", function () {
+    var text = aiText.value.trim();
+    var key = aiKey.value.trim();
+
+    if (!key) { setStatus("Enter your Anthropic API key first.", "err"); return; }
+    if (!text) { setStatus("Describe the lot or paste a bylaw excerpt first.", "err"); return; }
+
+    try { localStorage.setItem("pmg_anthropic_key", key); } catch (e) { /* ignore */ }
+
+    aiBtn.disabled = true;
+    setStatus("Asking Claude to read the description…", "busy");
+
+    var systemPrompt = "You extract zoning envelope parameters from a text description of a building lot. " +
+      "Respond with a single JSON object only, no prose, matching this shape: " +
+      "{\"lotWidth\": number|null, \"lotDepth\": number|null, \"setbackFront\": number|null, " +
+      "\"setbackSide\": number|null, \"setbackRear\": number|null, \"maxHeight\": number|null, " +
+      "\"floorHeight\": number|null, \"maxFAR\": number|null}. " +
+      "All lengths are in meters. maxFAR is a unitless ratio. " +
+      "If a value is not mentioned or cannot be inferred, use null for it. Do not guess wildly; " +
+      "only fill in values you can reasonably infer from the text.";
+
+    // Anthropic's API blocks direct browser requests unless this header opts in.
+    // It's meant for exactly this pattern: a visitor's own key, used only in
+    // their own browser session, never seen by this site or any server it runs.
+    fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 300,
+        system: systemPrompt,
+        messages: [
+          { role: "user", content: text },
+          { role: "assistant", content: "{" }, // prefill forces a bare JSON object back
+        ],
+      }),
+    })
+      .then(function (res) {
+        if (!res.ok) {
+          return res.json().catch(function () { return null; }).then(function (body) {
+            var msg = (body && body.error && body.error.message) || (res.status + " " + res.statusText);
+            throw new Error(msg);
+          });
+        }
+        return res.json();
+      })
+      .then(function (data) {
+        var block = data.content && data.content[0];
+        var content = block && block.text;
+        if (!content) throw new Error("No content in response.");
+        // The prefill "{" isn't echoed back, so stitch it back on before parsing.
+        var fields;
+        try { fields = JSON.parse("{" + content); } catch (e) { throw new Error("Model did not return valid JSON."); }
+        var applied = applyParsedFields(fields);
+        if (applied.length === 0) {
+          setStatus("Couldn't find any zoning values in that text. Try being more specific.", "err");
+        } else {
+          setStatus("Applied " + applied.length + " value" + (applied.length === 1 ? "" : "s") + " from the description: " + applied.join(", ") + ".", "ok");
+        }
+      })
+      .catch(function (err) {
+        setStatus("Couldn't parse that: " + err.message, "err");
+      })
+      .finally(function () {
+        aiBtn.disabled = false;
+      });
+  });
+
   function resize() {
     var w = viewport.clientWidth, h = viewport.clientHeight;
     camera.aspect = w / h;

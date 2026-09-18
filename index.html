@@ -41,6 +41,27 @@
   #stats .ok { color: #7fbf6a; }
   .foot { margin-top: 20px; font-size: 11px; color: #5c636b; line-height: 1.6; }
   .foot a { color: #e07b5a; text-decoration: none; }
+  #ai-box { background: #191d22; border: 1px solid #262b31; border-radius: 8px; padding: 12px; margin-bottom: 18px; }
+  #ai-box .ai-title { font-size: 12px; font-weight: 700; color: #e7e7e5; margin-bottom: 4px; }
+  #ai-box .ai-hint { font-size: 11px; color: #8b9199; line-height: 1.5; margin-bottom: 8px; }
+  #ai-box textarea {
+    width: 100%; min-height: 64px; resize: vertical; margin-bottom: 8px;
+    background: #0f1215; color: #e7e7e5; border: 1px solid #2a3138; border-radius: 5px;
+    padding: 7px 8px; font-size: 12px; font-family: inherit; line-height: 1.4;
+  }
+  #ai-box input[type=password] {
+    width: 100%; margin-bottom: 8px; background: #0f1215; color: #e7e7e5;
+    border: 1px solid #2a3138; border-radius: 5px; padding: 7px 8px; font-size: 12px;
+  }
+  #ai-parse-btn {
+    width: 100%; background: #e07b5a; color: #14171b; border: none; border-radius: 5px;
+    padding: 8px; font-size: 12px; font-weight: 700; cursor: pointer;
+  }
+  #ai-parse-btn:disabled { opacity: 0.5; cursor: default; }
+  #ai-status { font-size: 11px; margin-top: 8px; line-height: 1.5; }
+  #ai-status.err { color: #e0705a; }
+  #ai-status.ok { color: #7fbf6a; }
+  #ai-status.busy { color: #8b9199; }
   @media (max-width: 720px) {
     #app { flex-direction: column; }
     #panel { width: 100%; border-left: none; border-top: 1px solid #262b31; max-height: 55vh; }
@@ -52,7 +73,16 @@
   <div id="viewport"></div>
   <div id="panel">
     <h1>Parametric Massing Generator</h1>
-    <p class="subtitle">Adjust the lot and zoning envelope. The massing regenerates live from setbacks, height limit, and floor area ratio (FAR).</p>
+    <p class="subtitle">Adjust the lot and zoning envelope by hand below, or describe it in plain English and let AI fill in the sliders.</p>
+
+    <div id="ai-box">
+      <div class="ai-title">Parse from a zoning description</div>
+      <div class="ai-hint">Paste a bylaw excerpt or describe the lot in your own words. Uses your own Anthropic API key, sent directly from your browser to Anthropic, never stored or seen by this site.</div>
+      <textarea id="ai-text" placeholder="e.g. 24m x 36m lot, 4.5m front setback, 1.5m side setbacks, 6m rear setback, 14m height limit, FAR 1.8"></textarea>
+      <input type="password" id="ai-key" placeholder="Your Anthropic API key (sk-ant-...)" autocomplete="off">
+      <button id="ai-parse-btn">Parse with AI</button>
+      <div id="ai-status"></div>
+    </div>
 
     <div class="group">
       <label>Lot width <span class="val" id="v-lotW"></span></label>
