@@ -1,6 +1,6 @@
 # Parametric Massing Generator
 
-A computational design tool that generates a buildable massing envelope from zoning constraints, on a rectangular lot or an irregular parcel, with conversational AI-assisted parsing and refinement, source citations, an independent reviewer pass, and a multi-view (3D + plan) output.
+A computational design tool that generates a buildable massing envelope from zoning constraints, from a single rectangular lot up to a whole AI-zoned urban block, with conversational AI-assisted parsing and refinement, source citations, an independent reviewer pass, and a multi-view (3D + plan) output.
 
 **Try it live:** open `index.html` in a browser, or serve the folder with any static file server.
 
@@ -16,6 +16,14 @@ Instead of drawing a massing model by hand, this tool derives it directly from t
 - A few simplified, clearly-labeled **performance and code heuristics** flag when the massing crosses common thresholds: an approximate BC Building Code Part 9 (wood-frame) vs. Part 3 (non-combustible) construction-type threshold, a floor-plate-depth daylighting note, and a height-to-footprint slenderness note for structural feasibility. These are rules of thumb for an early sanity check, not code-compliance advice.
 
 It's a first-pass generative check, the kind of thing you'd want before spending time on a detailed design that turns out to not fit the envelope at all.
+
+## Urban block mode: AI-zoned city blocks, not just one building
+
+This is the biggest step up in scope, from generating a single building's envelope to generating an entire block. A larger site is subdivided into a grid of parcels (with a street/access gap between them), and each parcel gets a functional zone, residential, commercial, administrative, or park, each with its own real setback, height, and FAR rules. Park parcels get no building at all, just open space.
+
+Zoning can be assigned with AI, using directional language the way a planner actually talks: *"commercial along the south edge, a park in the northeast corner, residential everywhere else."* Claude gets each parcel's normalized position in the site (0 to 1 on each axis) and interprets fuzzy relational language against the *other parcels in the set*, "most east" means the highest X among them, not a fixed threshold, mirroring the exact coordinate-and-fuzzy-direction classification approach documented for the Urban Functional Zoning team in this lab's own DigitalFUTURES 2025 workshop paper. The whole block regenerates, with a live 3D scene, a color-coded 2D plan view (correctly north-up), and aggregate stats, total site area, total GFA, block-wide FAR, and a per-zone parcel breakdown.
+
+This moves the tool from a single-building generator to something that actually produces **urban form**, the project's own name, not just one massing envelope in isolation.
 
 ## A real Vancouver zoning district, with its actual conditional rules
 

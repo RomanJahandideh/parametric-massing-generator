@@ -282,8 +282,17 @@
   var vancouverPanel = document.getElementById("vancouver-panel");
   var vancouverRentalBonus = document.getElementById("vancouver-rental-bonus");
   var vancouverEligibilityEl = document.getElementById("vancouver-eligibility");
+  var modeBlockBtn = document.getElementById("mode-block");
+  var blockControls = document.getElementById("block-controls");
+  var singleParcelOutput = document.getElementById("single-parcel-output");
+  var blockStatsEl = document.getElementById("block-stats");
+  var blockLegendEl = document.getElementById("block-legend");
+  var blockEls = {};
+  ["blockW", "blockD", "blockRows", "blockCols", "blockGap"].forEach(function (id) {
+    blockEls[id] = document.getElementById(id);
+  });
 
-  var mode = "simple"; // "simple" | "irregular"
+  var mode = "simple"; // "simple" | "irregular" | "block"
   var lastStats = null;      // populated by regenerate(), read by the reviewer AI call
   var lastFootprint = null;  // last buildable footprint polygon, for the plan view / history
 
@@ -491,15 +500,231 @@
     mode = next;
     modeSimpleBtn.classList.toggle("active", mode === "simple");
     modeIrregularBtn.classList.toggle("active", mode === "irregular");
+    modeBlockBtn.classList.toggle("active", mode === "block");
     simpleControls.style.display = mode === "simple" ? "" : "none";
     irregularControls.style.display = mode === "irregular" ? "" : "none";
+    blockControls.style.display = mode === "block" ? "" : "none";
+    singleParcelOutput.style.display = mode === "block" ? "none" : "";
+    blockStatsEl.style.display = mode === "block" ? "block" : "none";
     if (mode !== "simple") vancouverPanel.style.display = "none";
     else if (zoningPresetSelect.value === "vancouver-r1-1") vancouverPanel.style.display = "block";
-    regenerate();
+    if (mode === "block") regenerateBlock(); else regenerate();
   }
   modeSimpleBtn.addEventListener("click", function () { setMode("simple"); });
   modeIrregularBtn.addEventListener("click", function () { setMode("irregular"); });
+  modeBlockBtn.addEventListener("click", function () { setMode("block"); });
   renderPresetSetbacks(PRESETS[presetSelect.value]);
+
+  // ==========================================================================
+  // Urban block mode: subdivides a larger site into a grid of parcels and
+  // assigns each a functional zone (residential / commercial / administrative
+  // / park), each with its own envelope rules. Zone assignment can be done
+  // with AI using directional language ("commercial along the south edge,
+  // park in the northeast corner"), the same centroid-position + fuzzy-
+  // direction pattern this lab's own DigitalFUTURES workshop team used for
+  // urban functional zoning: higher X = more east, higher Z = more north,
+  // "most east" = max, "southwest" = low X and Z relative to the median.
+  // This moves the tool from a single building envelope to actual urban
+  // form at block scale, matching Decoding Urban Form's own name.
+  // ==========================================================================
+
+  var ZONE_RULES = {
+    residential: { setback: 3, maxH: 14, floorH: 3.5, far: 1.8, color: 0xd8dadd, label: "Residential" },
+    commercial: { setback: 1.5, maxH: 20, floorH: 4.0, far: 3.0, color: 0xe0b57a, label: "Commercial" },
+    administrative: { setback: 4, maxH: 16, floorH: 3.6, far: 2.0, color: 0x9ab4cc, label: "Administrative" },
+    park: { setback: 0, maxH: 0, floorH: 1, far: 0, color: 0x4a8a5a, label: "Park / open space" },
+  };
+  var ZONE_ORDER = ["residential", "commercial", "administrative", "park"];
+
+  var blockZones = []; // zone type per parcel index, indexed to match buildBlockParcels() order
+  var lastBlockParcels = null;
+
+  function buildBlockParcels() {
+    var siteW = parseFloat(blockEls.blockW.value), siteD = parseFloat(blockEls.blockD.value);
+    var rows = parseInt(blockEls.blockRows.value, 10), cols = parseInt(blockEls.blockCols.value, 10);
+    var gap = parseFloat(blockEls.blockGap.value);
+    var cellW = (siteW - (cols - 1) * gap) / cols;
+    var cellD = (siteD - (rows - 1) * gap) / rows;
+    var parcels = [];
+    var idx = 0;
+    for (var r = 0; r < rows; r++) {
+      for (var c = 0; c < cols; c++) {
+        var cx = -siteW / 2 + cellW / 2 + c * (cellW + gap);
+        var cz = -siteD / 2 + cellD / 2 + r * (cellD + gap);
+        var poly = [
+          { x: cx - cellW / 2, z: cz - cellD / 2 }, { x: cx + cellW / 2, z: cz - cellD / 2 },
+          { x: cx + cellW / 2, z: cz + cellD / 2 }, { x: cx - cellW / 2, z: cz + cellD / 2 },
+        ];
+        var normX = cols > 1 ? c / (cols - 1) : 0.5;
+        var normZ = rows > 1 ? r / (rows - 1) : 0.5;
+        parcels.push({ index: idx, poly: poly, centroid: { x: cx, z: cz }, normX: normX, normZ: normZ, zone: blockZones[idx] || "residential" });
+        idx++;
+      }
+    }
+    if (blockZones.length !== parcels.length) blockZones = parcels.map(function (p) { return p.zone; });
+    return { siteW: siteW, siteD: siteD, parcels: parcels };
+  }
+
+  function renderBlockLegend() {
+    blockLegendEl.innerHTML = ZONE_ORDER.map(function (z) {
+      var rule = ZONE_RULES[z];
+      var hex = "#" + rule.color.toString(16).padStart(6, "0");
+      return "<div><span class=\"swatch\" style=\"background:" + hex + "\"></span>" + rule.label + "</div>";
+    }).join("");
+  }
+
+  function renderBlockPlanView(block) {
+    var siteW = block.siteW, siteD = block.siteD;
+    var pad = Math.max(siteW, siteD) * 0.08;
+    var viewW = siteW + pad * 2, viewH = siteD + pad * 2;
+    // North (larger z, normZ closer to 1) renders toward the top, matching
+    // standard map convention and the compass language used for AI zoning.
+    function toSvg(p) { return { x: p.x + siteW / 2 + pad, y: siteD / 2 - p.z + pad }; }
+    var svg = "<svg viewBox=\"0 0 " + viewW.toFixed(1) + " " + viewH.toFixed(1) + "\" xmlns=\"http://www.w3.org/2000/svg\">" +
+      "<polygon points=\"" + polyToSvgPoints([
+        { x: -siteW / 2, z: -siteD / 2 }, { x: siteW / 2, z: -siteD / 2 },
+        { x: siteW / 2, z: siteD / 2 }, { x: -siteW / 2, z: siteD / 2 },
+      ], toSvg) + "\" fill=\"none\" stroke=\"#3a4148\" stroke-width=\"" + (viewW * 0.008) + "\" />" +
+      block.parcels.map(function (p) {
+        var rule = ZONE_RULES[p.zone];
+        var hex = "#" + rule.color.toString(16).padStart(6, "0");
+        return "<polygon points=\"" + polyToSvgPoints(p.poly, toSvg) + "\" fill=\"" + hex + "\" fill-opacity=\"0.55\" stroke=\"" + hex + "\" stroke-width=\"" + (viewW * 0.006) + "\" />";
+      }).join("") +
+      "</svg>";
+    planContainer.innerHTML = svg;
+  }
+
+  function regenerateBlock() {
+    document.getElementById("v-blockW").textContent = fmt(parseFloat(blockEls.blockW.value), " m");
+    document.getElementById("v-blockD").textContent = fmt(parseFloat(blockEls.blockD.value), " m");
+    document.getElementById("v-blockGrid").textContent = blockEls.blockRows.value + " × " + blockEls.blockCols.value;
+    document.getElementById("v-blockGap").textContent = fmt(parseFloat(blockEls.blockGap.value), " m");
+
+    var block = buildBlockParcels();
+    lastBlockParcels = block;
+    clearGroup(genGroup);
+    genGroup.add(polygonOutline([
+      { x: -block.siteW / 2, z: -block.siteD / 2 }, { x: block.siteW / 2, z: -block.siteD / 2 },
+      { x: block.siteW / 2, z: block.siteD / 2 }, { x: -block.siteW / 2, z: block.siteD / 2 },
+    ], 0.01, 0x3a4148));
+
+    var totalGFA = 0, totalSiteArea = block.siteW * block.siteD, zoneCounts = { residential: 0, commercial: 0, administrative: 0, park: 0 };
+
+    block.parcels.forEach(function (p) {
+      var rule = ZONE_RULES[p.zone];
+      zoneCounts[p.zone]++;
+      var lotArea = shoelaceArea(p.poly);
+
+      if (p.zone === "park") {
+        var parkMat = new THREE.MeshStandardMaterial({ color: rule.color, roughness: 1 });
+        var parkMesh = buildExtrudedPolygonMesh(p.poly, 0.15, parkMat);
+        if (parkMesh) genGroup.add(parkMesh);
+        genGroup.add(polygonOutline(p.poly, 0.16, rule.color));
+        return;
+      }
+
+      var setbacks = p.poly.map(function () { return rule.setback; });
+      var footprint = offsetPolygonInward(p.poly, setbacks);
+      var footprintArea = footprint.length >= 3 ? shoelaceArea(footprint) : 0;
+      var floorsByHeight = Math.max(0, Math.floor(rule.maxH / rule.floorH));
+      var floorsByFAR = footprintArea > 0 ? Math.floor(rule.far * lotArea / footprintArea) : 0;
+      var floors = Math.max(0, Math.min(floorsByHeight, floorsByFAR));
+      var builtHeight = floors * rule.floorH;
+      totalGFA += floors * footprintArea;
+
+      genGroup.add(polygonOutline(p.poly, 0.02, 0x3a4148));
+      if (footprint.length >= 3) genGroup.add(polygonOutline(footprint, 0.04, rule.color));
+      if (floors > 0 && footprint.length >= 3) {
+        var mat = new THREE.MeshStandardMaterial({ color: rule.color, roughness: 0.85, metalness: 0.02, side: THREE.DoubleSide });
+        var mesh = buildExtrudedPolygonMesh(footprint, builtHeight, mat);
+        if (mesh) {
+          genGroup.add(mesh);
+          var edges = new THREE.EdgesGeometry(mesh.geometry);
+          genGroup.add(new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x1a1e23 })));
+        }
+      }
+    });
+
+    target.set(0, 8, 0);
+    radius = Math.max(block.siteW, block.siteD) * 1.15;
+    updateCamera();
+    renderBlockPlanView(block);
+    renderBlockLegend();
+
+    var overallFAR = totalSiteArea > 0 ? totalGFA / totalSiteArea : 0;
+    blockStatsEl.innerHTML =
+      "Site area: <b>" + fmt(totalSiteArea) + " m&sup2;</b><br>" +
+      "Parcels: <b>" + block.parcels.length + "</b> (" +
+      ZONE_ORDER.map(function (z) { return zoneCounts[z] + " " + ZONE_RULES[z].label.toLowerCase(); }).join(", ") + ")<br>" +
+      "Total gross floor area: <b>" + fmt(totalGFA) + " m&sup2;</b><br>" +
+      "Block-wide FAR: <b>" + fmt(overallFAR) + "</b>";
+
+    logHistory(
+      "Block regenerated (" + block.parcels.length + " parcels)",
+      null,
+      Math.round(totalGFA) + " m² total GFA, block FAR " + fmt(overallFAR) + ", " +
+        ZONE_ORDER.map(function (z) { return zoneCounts[z] + " " + ZONE_RULES[z].label.toLowerCase(); }).join(", ")
+    );
+  }
+
+  Object.keys(blockEls).forEach(function (id) {
+    blockEls[id].addEventListener("input", function () {
+      if (id === "blockRows" || id === "blockCols") blockZones = []; // grid shape changed, re-default zones
+      if (mode === "block") regenerateBlock();
+    });
+  });
+
+  var BLOCK_CLASSIFY_SYSTEM = "You assign functional zoning to parcels in an urban block, based on their " +
+    "position, the way a planner describes zoning with directional language. You'll get a list of parcels " +
+    "with normalized positions in the site: normX 0 is the west edge, 1 is the east edge; normZ 0 is the " +
+    "south edge, 1 is the north edge. You'll also get a zoning instruction using directional language. " +
+    "Interpret fuzzy directional commands relationally against the other parcels given, not as fixed " +
+    "thresholds: \"most east\" means the highest normX among them, \"southwest\" means low normX and low " +
+    "normZ relative to the median of the set. Respond with a single JSON object only, no prose: " +
+    "{\"assignments\": [{\"index\": number, \"zone\": \"residential\"|\"commercial\"|\"administrative\"|\"park\", " +
+    "\"reason\": string}]}, exactly one entry per parcel index given. If the instruction doesn't specify a " +
+    "parcel's zone, default it to \"residential\".";
+
+  var blockTextEl = document.getElementById("block-text");
+  var blockClassifyBtn = document.getElementById("block-classify-btn");
+  var blockStatusEl = document.getElementById("block-status");
+
+  function setBlockStatus(msg, kind) {
+    blockStatusEl.textContent = msg;
+    blockStatusEl.className = kind || "";
+  }
+
+  blockClassifyBtn.addEventListener("click", function () {
+    var instruction = blockTextEl.value.trim();
+    var key = aiKey.value.trim();
+    if (!key) { setBlockStatus("Enter your Anthropic API key first (in the parse box above).", "err"); return; }
+    if (!instruction) { setBlockStatus("Describe how the block should be zoned first.", "err"); return; }
+    try { localStorage.setItem("pmg_anthropic_key", key); } catch (e) { /* ignore */ }
+
+    blockClassifyBtn.disabled = true;
+    setBlockStatus("Asking Claude to classify each parcel…", "busy");
+
+    var block = buildBlockParcels();
+    var parcelSummary = block.parcels.map(function (p) {
+      return { index: p.index, normX: Math.round(p.normX * 100) / 100, normZ: Math.round(p.normZ * 100) / 100 };
+    });
+    var userContent = "PARCELS:\n" + JSON.stringify(parcelSummary, null, 2) + "\n\nINSTRUCTION:\n" + instruction;
+
+    callClaude(key, BLOCK_CLASSIFY_SYSTEM, userContent, 800)
+      .then(function (result) {
+        var assignments = result.assignments || [];
+        assignments.forEach(function (a) {
+          if (typeof a.index === "number" && ZONE_RULES[a.zone]) blockZones[a.index] = a.zone;
+        });
+        regenerateBlock();
+        setBlockStatus("Classified " + assignments.length + " parcel" + (assignments.length === 1 ? "" : "s") + " from the instruction.", "ok");
+        blockClassifyBtn.disabled = false;
+      })
+      .catch(function (err) {
+        setBlockStatus("Couldn't classify: " + err.message, "err");
+        blockClassifyBtn.disabled = false;
+      });
+  });
 
   // ==========================================================================
   // Generation history: a visible, traceable record of every parse + review
@@ -510,11 +735,11 @@
   var historyLogEl = document.getElementById("history-log");
   var historyEntries = [];
 
-  function logHistory(sourceLabel, stats) {
+  function logHistory(sourceLabel, stats, detailOverride) {
     var entry = {
       time: new Date(),
       source: sourceLabel,
-      floors: stats.floors, gfa: Math.round(stats.gfa), far: fmt(stats.farAchieved),
+      detail: detailOverride || (stats.floors + " floors, " + Math.round(stats.gfa) + " m² GFA, FAR " + fmt(stats.farAchieved)),
     };
     historyEntries.unshift(entry);
     if (historyEntries.length > 12) historyEntries.pop();
@@ -523,8 +748,7 @@
       var mm = e.time.getMinutes().toString().padStart(2, "0");
       var ss = e.time.getSeconds().toString().padStart(2, "0");
       return "<div class=\"hist-row\"><span class=\"hist-time\">" + hh + ":" + mm + ":" + ss + "</span> &middot; " +
-        "<span class=\"hist-src\">" + e.source + "</span> &middot; " +
-        e.floors + " floors, " + e.gfa + " m&sup2; GFA, FAR " + e.far + "</div>";
+        "<span class=\"hist-src\">" + e.source + "</span> &middot; " + e.detail + "</div>";
     }).join("");
   }
 
